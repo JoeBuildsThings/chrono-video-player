@@ -4,9 +4,12 @@
     "slug": "chrono-video-player",
     "version": "1.0.0",
     "orientation": "default",
+    "icon": "./assets/icon.png",
     "userInterfaceStyle": "dark",
     "newArchEnabled": true,
     "splash": {
+      "image": "./assets/splash-icon.png",
+      "resizeMode": "contain",
       "backgroundColor": "#040812"
     },
     "ios": {
@@ -17,6 +20,10 @@
     },
     "android": {
       "backgroundColor": "#040812",
+      "adaptiveIcon": {
+        "foregroundImage": "./assets/adaptive-icon.png",
+        "backgroundColor": "#040812"
+      },
       "permissions": [
         "android.permission.READ_EXTERNAL_STORAGE",
         "android.permission.WRITE_EXTERNAL_STORAGE",
@@ -24,6 +31,9 @@
         "android.permission.WRITE_SETTINGS"
       ],
       "package": "com.joebuildsthings.chronoplayer"
+    },
+    "web": {
+      "favicon": "./assets/favicon.png"
     },
     "plugins": [
       [

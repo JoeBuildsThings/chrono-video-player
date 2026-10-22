@@ -1,0 +1,120 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1024 1024" width="1024" height="1024">
+  <defs>
+    <linearGradient id="abyssBg" x1="0%" y1="0%" x2="100%" y2="100%">
+      <stop offset="0%" stop-color="#040812" />
+      <stop offset="50%" stop-color="#081229" />
+      <stop offset="100%" stop-color="#03060E" />
+    </linearGradient>
+
+    <radialGradient id="cobaltCore" cx="50%" cy="45%" r="55%">
+      <stop offset="0%" stop-color="#0EA5E9" stop-opacity="0.28" />
+      <stop offset="55%" stop-color="#1D4ED8" stop-opacity="0.12" />
+      <stop offset="100%" stop-color="#040812" stop-opacity="0" />
+    </radialGradient>
+
+    <linearGradient id="glassSurface" x1="0%" y1="0%" x2="100%" y2="100%">
+      <stop offset="0%" stop-color="#1E3A8A" stop-opacity="0.52" />
+      <stop offset="100%" stop-color="#091534" stop-opacity="0.84" />
+    </linearGradient>
+
+    <linearGradient id="specularRim" x1="0%" y1="0%" x2="100%" y2="100%">
+      <stop offset="0%" stop-color="#38BDF8" stop-opacity="0.85" />
+      <stop offset="50%" stop-color="#0EA5E9" stop-opacity="0.25" />
+      <stop offset="100%" stop-color="#1E40AF" stop-opacity="0.7" />
+    </linearGradient>
+
+    <linearGradient id="electricPrism" x1="0%" y1="0%" x2="100%" y2="100%">
+      <stop offset="0%" stop-color="#7DD3FC" />
+      <stop offset="45%" stop-color="#0EA5E9" />
+      <stop offset="100%" stop-color="#2563EB" />
+    </linearGradient>
+
+    <linearGradient id="topSheen" x1="50%" y1="0%" x2="50%" y2="100%">
+      <stop offset="0%" stop-color="#F8FAFC" stop-opacity="0.22" />
+      <stop offset="100%" stop-color="#38BDF8" stop-opacity="0" />
+    </linearGradient>
+  </defs>
+
+  <rect width="1024" height="1024" rx="224" fill="url(#abyssBg)" />
+  <circle cx="512" cy="512" r="460" fill="url(#cobaltCore)" />
+
+  <rect
+    x="96"
+    y="96"
+    width="832"
+    height="832"
+    rx="184"
+    fill="url(#glassSurface)"
+    stroke="url(#specularRim)"
+    stroke-width="6"
+  />
+
+  <path
+    d="M 180 100 L 844 100 A 176 176 0 0 1 920 260 Q 512 360 104 260 A 176 176 0 0 1 180 100 Z"
+    fill="url(#topSheen)"
+  />
+
+  <circle
+    cx="512"
+    cy="512"
+    r="310"
+    fill="none"
+    stroke="#1E3A8A"
+    stroke-width="14"
+    stroke-opacity="0.65"
+  />
+
+  <circle
+    cx="512"
+    cy="512"
+    r="310"
+    fill="none"
+    stroke="url(#electricPrism)"
+    stroke-width="14"
+    stroke-linecap="round"
+    stroke-dasharray="1380 600"
+    transform="rotate(-45 512 512)"
+  />
+
+  <circle
+    cx="512"
+    cy="512"
+    r="254"
+    fill="none"
+    stroke="#38BDF8"
+    stroke-width="3"
+    stroke-opacity="0.32"
+    stroke-dasharray="14 26"
+  />
+
+  <g stroke="#38BDF8" stroke-linecap="round" opacity="0.75">
+    <line x1="512" y1="166" x2="512" y2="190" stroke-width="8" />
+    <line x1="858" y1="512" x2="834" y2="512" stroke-width="8" />
+    <line x1="512" y1="858" x2="512" y2="834" stroke-width="8" />
+    <line x1="166" y1="512" x2="190" y2="512" stroke-width="8" />
+  </g>
+
+  <path
+    d="M 418 338 C 418 314 444 299 465 311 L 702 448 C 723 460 723 490 702 502 L 465 639 C 444 651 418 636 418 612 Z"
+    transform="translate(0, 37)"
+    fill="#020617"
+    opacity="0.65"
+  />
+
+  <path
+    d="M 418 338 C 418 314 444 299 465 311 L 702 448 C 723 460 723 490 702 502 L 465 639 C 444 651 418 636 418 612 Z"
+    transform="translate(0, 22)"
+    fill="url(#electricPrism)"
+    stroke="#BAE6FD"
+    stroke-width="5"
+  />
+
+  <path
+    d="M 456 378 L 636 482 L 456 520 Z"
+    transform="translate(0, 22)"
+    fill="#F8FAFC"
+    opacity="0.26"
+  />
+
+  <circle cx="731" cy="293" r="14" fill="#7DD3FC" />
+</svg>
