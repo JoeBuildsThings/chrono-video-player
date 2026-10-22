@@ -1,25 +1,40 @@
 {
   "expo": {
-    "name": "chrono-video-player",
+    "name": "Chrono Player",
     "slug": "chrono-video-player",
     "version": "1.0.0",
-    "orientation": "portrait",
-    "icon": "./assets/icon.png",
-    "userInterfaceStyle": "light",
+    "orientation": "default",
+    "userInterfaceStyle": "dark",
+    "newArchEnabled": true,
+    "splash": {
+      "backgroundColor": "#040812"
+    },
     "ios": {
-      "supportsTablet": true
+      "supportsTablet": true,
+      "infoPlist": {
+        "NSPhotoLibraryUsageDescription": "Chrono Player requires media library access to organize and play your local videos."
+      }
     },
     "android": {
-      "adaptiveIcon": {
-        "backgroundColor": "#E6F4FE",
-        "foregroundImage": "./assets/android-icon-foreground.png",
-        "backgroundImage": "./assets/android-icon-background.png",
-        "monochromeImage": "./assets/android-icon-monochrome.png"
-      },
-      "predictiveBackGestureEnabled": false
+      "backgroundColor": "#040812",
+      "permissions": [
+        "android.permission.READ_EXTERNAL_STORAGE",
+        "android.permission.WRITE_EXTERNAL_STORAGE",
+        "android.permission.READ_MEDIA_VIDEO",
+        "android.permission.WRITE_SETTINGS"
+      ],
+      "package": "com.joebuildsthings.chronoplayer"
     },
-    "web": {
-      "favicon": "./assets/favicon.png"
-    }
+    "plugins": [
+      [
+        "expo-media-library",
+        {
+          "photosPermission": "Allow Chrono Player to access your media files.",
+          "savePhotosPermission": "Allow Chrono Player to manage video metadata.",
+          "isAccessMediaLocationEnabled": true
+        }
+      ],
+      "expo-screen-orientation"
+    ]
   }
 }
