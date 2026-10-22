@@ -9,7 +9,7 @@ import {
   TouchableOpacity,
   View,
 } from 'react-native';
-import { Audio, ResizeMode, Video, AVPlaybackStatus } from 'expo-av';
+import { useVideoPlayer, VideoView } from 'expo-video';
 import { Gesture, GestureDetector } from 'react-native-gesture-handler';
 import { useKeepAwake } from 'expo-keep-awake';
 import { Ionicons } from '@expo/vector-icons';
@@ -30,7 +30,7 @@ import { THEME } from '../../core/constants/theme';
 export const VideoPlayerScreen: React.FC = () => {
   useKeepAwake();
 
-  const videoRef = useRef<Video | null>(null);
+  
   const [dimensions, setDimensions] = useState<ScaledSize>(() => Dimensions.get('window'));
   const [isLabOpen, setIsLabOpen] = useState(false);
   const [isLandscape, setIsLandscape] = useState(false);
@@ -126,7 +126,7 @@ export const VideoPlayerScreen: React.FC = () => {
     const timer = setInterval(() => {
       const expired = tickSleepTimer();
       if (expired && videoRef.current) {
-        videoRef.current.pauseAsync().catch(() => {});
+        player.pause().catch(() => {});
       }
     }, 1000);
     return () => clearInterval(timer);
@@ -144,7 +144,7 @@ export const VideoPlayerScreen: React.FC = () => {
     const clamped = Math.max(0, Math.min(durationMs || targetMs, targetMs));
     setPlaybackStatus({ positionMs: clamped });
     try {
-      await videoRef.current.setPositionAsync(clamped);
+      await (player.currentTime = clamped / 1000);
     } catch {
       return;
     }
@@ -154,9 +154,9 @@ export const VideoPlayerScreen: React.FC = () => {
     if (!videoRef.current) return;
     try {
       if (isPlaying) {
-        await videoRef.current.pauseAsync();
+        await player.pause();
       } else {
-        await videoRef.current.playAsync();
+        await player.play();
       }
     } catch {
       return;
@@ -408,20 +408,12 @@ export const VideoPlayerScreen: React.FC = () => {
             activeOpacity={0.9}
             onPress={expandPlayer}
           >
-            <Video
-              ref={videoRef}
-              source={{ uri: activeVideo.uri }}
-              style={styles.videoElement}
-              resizeMode={ResizeMode.COVER}
-              shouldPlay={isPlaying}
-              rate={playbackSpeed}
-              shouldCorrectPitch={true}
-              volume={isMuted ? 0 : Math.min(1.0, volumeBoost)}
-              isMuted={isMuted}
-              positionMillis={positionMs}
-              progressUpdateIntervalMillis={500}
-              onPlaybackStatusUpdate={onPlaybackStatusUpdate}
-            />
+            <VideoView
+        player={player}
+        style={style}
+        contentFit={resizeMode === 'contain' ? 'contain' : 'cover'}
+        nativeControls={false}
+      />
             <View style={styles.miniExpandBadge}>
               <Ionicons name="expand-outline" size={12} color={THEME.colors.textPrimary} />
             </View>
@@ -469,21 +461,12 @@ export const VideoPlayerScreen: React.FC = () => {
               },
             ]}
           >
-            <Video
-              ref={videoRef}
-              source={{ uri: activeVideo.uri }}
-              style={styles.videoElement}
-              resizeMode={resizeModeMap[aspectRatio] || ResizeMode.CONTAIN}
-              shouldPlay={isPlaying}
-              rate={playbackSpeed}
-              shouldCorrectPitch={true}
-              volume={isMuted ? 0 : Math.min(1.0, volumeBoost)}
-              isMuted={isMuted}
-              positionMillis={positionMs}
-              progressUpdateIntervalMillis={250}
-              onPlaybackStatusUpdate={onPlaybackStatusUpdate}
-              onError={(err) => setPlaybackError(err)}
-            />
+            <VideoView
+        player={player}
+        style={style}
+        contentFit={resizeMode === 'contain' ? 'contain' : 'cover'}
+        nativeControls={false}
+      />
           </View>
 
           {brightness < 0.25 && (
