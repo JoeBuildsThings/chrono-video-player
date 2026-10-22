@@ -9,7 +9,7 @@ import {
   TouchableOpacity,
   View,
 } from 'react-native';
-import { Audio, ResizeMode, Video, AVPlaybackStatus } from 'expo-av';
+import { VideoView, useVideoPlayer } from 'expo-video';
 import { Gesture, GestureDetector } from 'react-native-gesture-handler';
 import { useKeepAwake } from 'expo-keep-awake';
 import { Ionicons } from '@expo/vector-icons';
@@ -28,9 +28,16 @@ import { VlcControlModal } from './VlcControlModal';
 import { THEME } from '../../core/constants/theme';
 
 export const VideoPlayerScreen: React.FC = () => {
+  const activeVideo = usePlayerStore((state) => state.activeVideo);
+
+  if (!activeVideo) return null;
+
+  return <VideoPlayerContent sourceUri={activeVideo.uri} />;
+};
+
+const VideoPlayerContent: React.FC<{ sourceUri: string }> = ({ sourceUri }) => {
   useKeepAwake();
 
-  const videoRef = useRef<Video | null>(null);
   const [dimensions, setDimensions] = useState<ScaledSize>(() => Dimensions.get('window'));
   const [isLabOpen, setIsLabOpen] = useState(false);
   const [isLandscape, setIsLandscape] = useState(false);
@@ -96,6 +103,15 @@ export const VideoPlayerScreen: React.FC = () => {
     playPrevInQueue,
   } = usePlayerStore();
 
+  const videoSource = useMemo(() => ({ uri: sourceUri }), [sourceUri]);
+  const videoPlayer = useVideoPlayer(videoSource, (player) => {
+    player.timeUpdateEventInterval = 0.25;
+    player.audioMixingMode = 'duckOthers';
+  });
+  const resumeSeekVideoIdRef = useRef<string | null>(null);
+  const playbackStateRef = useRef({ activeVideo, abRepeat, decoderMode, positionMs });
+  playbackStateRef.current = { activeVideo, abRepeat, decoderMode, positionMs };
+
   const recordPlaybackProgress = useLibraryStore((s) => s.recordPlaybackProgress);
 
   useEffect(() => {
@@ -114,23 +130,93 @@ export const VideoPlayerScreen: React.FC = () => {
   }, []);
 
   useEffect(() => {
-    Audio.setAudioModeAsync({
-      playsInSilentModeIOS: true,
-      staysActiveInBackground: isBackgroundAudioEnabled,
-      shouldDuckAndroid: true,
-    }).catch(() => {});
-  }, [isBackgroundAudioEnabled]);
+    videoPlayer.playbackRate = playbackSpeed;
+    videoPlayer.preservesPitch = true;
+    videoPlayer.volume = isMuted ? 0 : Math.min(1.0, volumeBoost);
+    videoPlayer.muted = isMuted;
+    videoPlayer.staysActiveInBackground = isBackgroundAudioEnabled;
+  }, [videoPlayer, playbackSpeed, isMuted, volumeBoost, isBackgroundAudioEnabled]);
+
+  useEffect(() => {
+    if (isPlaying) {
+      videoPlayer.play();
+    } else {
+      videoPlayer.pause();
+    }
+  }, [videoPlayer, isPlaying]);
+
+  useEffect(() => {
+    const timeSubscription = videoPlayer.addListener('timeUpdate', ({ currentTime }) => {
+      const state = playbackStateRef.current;
+      const currentPos = Math.max(0, currentTime * 1000);
+      const repeat = state.abRepeat;
+
+      if (
+        repeat.enabled &&
+        repeat.pointAMs !== null &&
+        repeat.pointBMs !== null &&
+        currentPos >= repeat.pointBMs
+      ) {
+        videoPlayer.currentTime = repeat.pointAMs / 1000;
+        setPlaybackStatus({ positionMs: repeat.pointAMs });
+        return;
+      }
+
+      setPlaybackStatus({
+        positionMs: currentPos,
+        durationMs: videoPlayer.duration * 1000 || state.activeVideo?.duration || 0,
+      });
+    });
+
+    const statusSubscription = videoPlayer.addListener('statusChange', ({ status, error }) => {
+      setPlaybackStatus({ isBuffering: status === 'loading' });
+      if (status === 'error' && error) {
+        setPlaybackError(`Decoder (${playbackStateRef.current.decoderMode}) Error: ${error.message || String(error)}`);
+        return;
+      }
+
+      if (status === 'readyToPlay') {
+        setPlaybackError(null);
+        const state = playbackStateRef.current;
+        const videoId = state.activeVideo?.id;
+        if (videoId && resumeSeekVideoIdRef.current !== videoId) {
+          resumeSeekVideoIdRef.current = videoId;
+          if (state.positionMs > 0) {
+            videoPlayer.currentTime = state.positionMs / 1000;
+          }
+        }
+      }
+    });
+
+    const playingSubscription = videoPlayer.addListener('playingChange', ({ isPlaying: playing }) => {
+      setPlaybackStatus({ isPlaying: playing });
+    });
+
+    const endSubscription = videoPlayer.addListener('playToEnd', () => {
+      const next = playNextInQueue();
+      if (!next) {
+        setPlaybackStatus({ isPlaying: false });
+      }
+    });
+
+    return () => {
+      timeSubscription.remove();
+      statusSubscription.remove();
+      playingSubscription.remove();
+      endSubscription.remove();
+    };
+  }, [videoPlayer, playNextInQueue, setPlaybackStatus]);
 
   useEffect(() => {
     if (sleepTimerRemainingSec === null) return;
     const timer = setInterval(() => {
       const expired = tickSleepTimer();
-      if (expired && videoRef.current) {
-        videoRef.current.pauseAsync().catch(() => {});
+      if (expired) {
+        videoPlayer.pause();
       }
     }, 1000);
     return () => clearInterval(timer);
-  }, [sleepTimerRemainingSec]);
+  }, [sleepTimerRemainingSec, videoPlayer, tickSleepTimer]);
 
   const activeSubtitleCue = useMemo(() => {
     if (!activeSubtitleId) return null;
@@ -140,26 +226,20 @@ export const VideoPlayerScreen: React.FC = () => {
   }, [activeSubtitleId, subtitleTracks, positionMs, subtitleOffsetMs]);
 
   const seekToMs = async (targetMs: number) => {
-    if (!videoRef.current) return;
     const clamped = Math.max(0, Math.min(durationMs || targetMs, targetMs));
     setPlaybackStatus({ positionMs: clamped });
     try {
-      await videoRef.current.setPositionAsync(clamped);
+      videoPlayer.currentTime = clamped / 1000;
     } catch {
       return;
     }
   };
 
   const togglePlayPause = async () => {
-    if (!videoRef.current) return;
-    try {
-      if (isPlaying) {
-        await videoRef.current.pauseAsync();
-      } else {
-        await videoRef.current.playAsync();
-      }
-    } catch {
-      return;
+    if (isPlaying) {
+      videoPlayer.pause();
+    } else {
+      videoPlayer.play();
     }
   };
 
@@ -200,42 +280,6 @@ export const VideoPlayerScreen: React.FC = () => {
     await saveCurrentProgress();
     await HardwareService.unlockOrientation();
     closePlayer();
-  };
-
-  const onPlaybackStatusUpdate = (status: AVPlaybackStatus) => {
-    if (!status.isLoaded) {
-      if (status.error) {
-        setPlaybackError(`Decoder (${decoderMode}) Error: ${status.error}`);
-      }
-      return;
-    }
-
-    const currentPos = status.positionMillis || 0;
-    const totalDur = status.durationMillis || activeVideo?.duration || 0;
-
-    if (
-      abRepeat.enabled &&
-      abRepeat.pointAMs !== null &&
-      abRepeat.pointBMs !== null &&
-      currentPos >= abRepeat.pointBMs
-    ) {
-      videoRef.current?.setPositionAsync(abRepeat.pointAMs).catch(() => {});
-      return;
-    }
-
-    setPlaybackStatus({
-      isPlaying: status.isPlaying,
-      positionMs: currentPos,
-      durationMs: totalDur,
-      isBuffering: status.isBuffering,
-    });
-
-    if (status.didJustFinish) {
-      const next = playNextInQueue();
-      if (!next) {
-        setPlaybackStatus({ isPlaying: false });
-      }
-    }
   };
 
   const panGesture = Gesture.Pan()
@@ -389,12 +433,12 @@ export const VideoPlayerScreen: React.FC = () => {
 
   if (!activeVideo) return null;
 
-  const resizeModeMap: Record<string, ResizeMode> = {
-    FIT: ResizeMode.CONTAIN,
-    FILL: ResizeMode.COVER,
-    STRETCH: ResizeMode.STRETCH,
-    '16:9': ResizeMode.CONTAIN,
-    '4:3': ResizeMode.CONTAIN,
+  const resizeModeMap: Record<string, 'contain' | 'cover' | 'fill'> = {
+    FIT: 'contain',
+    FILL: 'cover',
+    STRETCH: 'fill',
+    '16:9': 'contain',
+    '4:3': 'contain',
   };
 
   const progressRatio = durationMs > 0 ? Math.min(1, Math.max(0, positionMs / durationMs)) : 0;
@@ -408,19 +452,11 @@ export const VideoPlayerScreen: React.FC = () => {
             activeOpacity={0.9}
             onPress={expandPlayer}
           >
-            <Video
-              ref={videoRef}
-              source={{ uri: activeVideo.uri }}
+            <VideoView
+              player={videoPlayer}
               style={styles.videoElement}
-              resizeMode={ResizeMode.COVER}
-              shouldPlay={isPlaying}
-              rate={playbackSpeed}
-              shouldCorrectPitch={true}
-              volume={isMuted ? 0 : Math.min(1.0, volumeBoost)}
-              isMuted={isMuted}
-              positionMillis={positionMs}
-              progressUpdateIntervalMillis={500}
-              onPlaybackStatusUpdate={onPlaybackStatusUpdate}
+              contentFit="cover"
+              nativeControls={false}
             />
             <View style={styles.miniExpandBadge}>
               <Ionicons name="expand-outline" size={12} color={THEME.colors.textPrimary} />
@@ -469,20 +505,11 @@ export const VideoPlayerScreen: React.FC = () => {
               },
             ]}
           >
-            <Video
-              ref={videoRef}
-              source={{ uri: activeVideo.uri }}
+            <VideoView
+              player={videoPlayer}
               style={styles.videoElement}
-              resizeMode={resizeModeMap[aspectRatio] || ResizeMode.CONTAIN}
-              shouldPlay={isPlaying}
-              rate={playbackSpeed}
-              shouldCorrectPitch={true}
-              volume={isMuted ? 0 : Math.min(1.0, volumeBoost)}
-              isMuted={isMuted}
-              positionMillis={positionMs}
-              progressUpdateIntervalMillis={250}
-              onPlaybackStatusUpdate={onPlaybackStatusUpdate}
-              onError={(err) => setPlaybackError(err)}
+              contentFit={resizeModeMap[aspectRatio] || 'contain'}
+              nativeControls={false}
             />
           </View>
 
