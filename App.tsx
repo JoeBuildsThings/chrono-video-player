@@ -2,6 +2,7 @@ import React, { useEffect } from 'react';
 import { StyleSheet, View } from 'react-native';
 import { StatusBar } from 'expo-status-bar';
 import { GestureHandlerRootView } from 'react-native-gesture-handler';
+import { SafeAreaProvider } from 'react-native-safe-area-context';
 import { useLibraryStore } from './src/store/useLibraryStore';
 import { usePlayerStore } from './src/store/usePlayerStore';
 import { LibraryScreen } from './src/ui/library/LibraryScreen';
@@ -18,13 +19,15 @@ export default function App() {
   }, []);
 
   return (
-    <GestureHandlerRootView style={styles.root}>
-      <StatusBar style="light" hidden={Boolean(activeVideo && !isMinimized)} />
-      <View style={styles.root}>
-        <LibraryScreen />
-        {activeVideo && <VideoPlayerScreen />}
-      </View>
-    </GestureHandlerRootView>
+    <SafeAreaProvider>
+      <GestureHandlerRootView style={styles.root}>
+        <StatusBar style="light" hidden={Boolean(activeVideo && !isMinimized)} />
+        <View style={styles.root}>
+          <LibraryScreen />
+          {activeVideo && <VideoPlayerScreen />}
+        </View>
+      </GestureHandlerRootView>
+    </SafeAreaProvider>
   );
 }
 
