@@ -34,6 +34,7 @@ const KeepAwakeGate: React.FC = () => {
 
 export const VideoPlayerScreen: React.FC = () => {
   const activeVideo = usePlayerStore((state) => state.activeVideo);
+  const originalBrightness = useRef<number | null>(null);
 
   useEffect(() => {
     let mounted = true;
@@ -55,6 +56,7 @@ export const VideoPlayerScreen: React.FC = () => {
 
 const PlayerContent: React.FC<{ video: VideoItem }> = ({ video }) => {
   const { width, height } = useWindowDimensions();
+  const videoViewRef = useRef<VideoView | null>(null);
   const isLandscape = width > height;
   const [settingsOpen, setSettingsOpen] = useState(false);
   const [nativeSubtitleTracks, setNativeSubtitleTracks] = useState<NativeSubtitleOption[]>([]);
@@ -299,7 +301,7 @@ const PlayerContent: React.FC<{ video: VideoItem }> = ({ video }) => {
 
   const startPictureInPicture = async () => {
     try {
-      await player.startPictureInPicture();
+      await videoViewRef.current?.startPictureInPicture();
     } catch {
       Alert.alert('Picture-in-picture unavailable', 'This device or video does not support picture-in-picture right now.');
     }
@@ -471,11 +473,13 @@ const PlayerContent: React.FC<{ video: VideoItem }> = ({ video }) => {
           <View style={styles.gesturePlane}>
             <View style={[videoFrameStyle, { transform: [{ scale: zoomScale }] }]}>
               <VideoView
+                ref={videoViewRef}
                 player={player}
                 style={styles.video}
                 contentFit={resizeContentFit}
                 nativeControls={false}
                 allowsPictureInPicture
+                startsPictureInPictureAutomatically={false}
                 surfaceType="textureView"
               />
             </View>

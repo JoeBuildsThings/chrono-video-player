@@ -230,6 +230,18 @@ export const LibraryScreen: React.FC = () => {
     );
   };
 
+  const renderEmpty = () => (
+    <View style={styles.emptyState}>
+      <View style={styles.emptyIcon}><Ionicons name={viewMode === 'folders' ? 'folder-open-outline' : 'film-outline'} size={30} color={THEME.colors.accentCyan} /></View>
+      <Text style={styles.emptyTitle}>{searchQuery ? 'Nothing matched' : 'Your library is quiet'}</Text>
+      <Text style={styles.emptyHint}>{searchQuery ? 'Try a shorter title or folder name.' : 'Import a video or refresh after adding media to your device.'}</Text>
+      <TouchableOpacity style={styles.secondaryButton} onPress={handlePickVideo}>
+        <Ionicons name="add" size={18} color={THEME.colors.accentCyan} />
+        <Text style={styles.secondaryButtonText}>Open a video file</Text>
+      </TouchableOpacity>
+    </View>
+  );
+
   const renderFolder = ({ item }: { item: VideoFolder }) => (
     <Pressable
       onPress={() => { setViewMode('all'); selectFolder(item.id); }}
@@ -407,24 +419,28 @@ export const LibraryScreen: React.FC = () => {
                     </Pressable>
                   ))}
                 </ScrollView>
-              ) : (
-                <FlatList
+              ) : viewMode === 'folders' ? (
+                <FlatList<VideoFolder>
                   style={styles.list}
                   contentContainerStyle={styles.listContent}
-                  data={viewMode === 'folders' ? displayedFolders : displayedVideos}
+                  data={displayedFolders}
                   keyExtractor={(item) => item.id}
-                  renderItem={viewMode === 'folders' ? renderFolder as any : renderVideo as any}
-                  ListEmptyComponent={
-                    <View style={styles.emptyState}>
-                      <View style={styles.emptyIcon}><Ionicons name={viewMode === 'folders' ? 'folder-open-outline' : 'film-outline'} size={30} color={THEME.colors.accentCyan} /></View>
-                      <Text style={styles.emptyTitle}>{searchQuery ? 'Nothing matched' : 'Your library is quiet'}</Text>
-                      <Text style={styles.emptyHint}>{searchQuery ? 'Try a shorter title or folder name.' : 'Import a video or refresh after adding media to your device.'}</Text>
-                      <TouchableOpacity style={styles.secondaryButton} onPress={handlePickVideo}>
-                        <Ionicons name="add" size={18} color={THEME.colors.accentCyan} />
-                        <Text style={styles.secondaryButtonText}>Open a video file</Text>
-                      </TouchableOpacity>
-                    </View>
-                  }
+                  renderItem={renderFolder}
+                  ListEmptyComponent={renderEmpty}
+                  refreshControl={<RefreshControl refreshing={isLoading} onRefresh={() => refreshLibrary()} tintColor={THEME.colors.accentCyan} />}
+                  initialNumToRender={12}
+                  maxToRenderPerBatch={10}
+                  windowSize={7}
+                  keyboardShouldPersistTaps="handled"
+                />
+              ) : (
+                <FlatList<VideoItem>
+                  style={styles.list}
+                  contentContainerStyle={styles.listContent}
+                  data={displayedVideos}
+                  keyExtractor={(item) => item.id}
+                  renderItem={renderVideo}
+                  ListEmptyComponent={renderEmpty}
                   refreshControl={<RefreshControl refreshing={isLoading} onRefresh={() => refreshLibrary()} tintColor={THEME.colors.accentCyan} />}
                   initialNumToRender={12}
                   maxToRenderPerBatch={10}
