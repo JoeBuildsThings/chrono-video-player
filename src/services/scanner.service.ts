@@ -1,34 +1,32 @@
-import * as MediaLibrary from 'expo-media-library';
+import * as MediaLibrary from 'expo-media-library/legacy';
 import { PermissionStatusType, VideoFolder, VideoItem } from '../core/types';
 
 function extractFolderName(uri: string, fallbackAlbumTitle?: string): string {
-  if (fallbackAlbumTitle && fallbackAlbumTitle.trim().length > 0) {
-    return fallbackAlbumTitle;
-  }
+  if (fallbackAlbumTitle?.trim()) return fallbackAlbumTitle;
   try {
-    const decoded = decodeURIComponent(uri);
-    const segments = decoded.split('/').filter(Boolean);
-    if (segments.length >= 2) {
-      return segments[segments.length - 2];
-    }
+    const parts = decodeURIComponent(uri).split('/').filter(Boolean);
+    if (parts.length >= 2) return parts[parts.length - 2];
   } catch {
-    // Fallback
+    // Some Android content URIs are not valid URI-encoded file paths.
   }
   return 'Internal Videos';
 }
 
 function cleanVideoTitle(filename: string): string {
-  return filename.replace(/\.[^/.]+$/, '').replace(/[._]/g, ' ');
+  return filename.replace(/\.[^/.]+$/, '').replace(/[._]/g, ' ').trim();
+}
+
+function toPermissionStatus(permission: { granted: boolean; status: string; canAskAgain: boolean }): PermissionStatusType {
+  if (permission.granted) return 'granted';
+  if (permission.status === 'undetermined') return 'undetermined';
+  return permission.canAskAgain ? 'denied' : 'blocked';
 }
 
 export const ScannerService = {
   async checkPermissionStatus(): Promise<PermissionStatusType> {
     try {
-      const perm = await MediaLibrary.getPermissionsAsync();
-      if (perm.granted) return 'granted';
-      if (perm.status === 'undetermined') return 'undetermined';
-      if (!perm.canAskAgain) return 'blocked';
-      return 'denied';
+      const permission = await MediaLibrary.getPermissionsAsync(false, ['video']);
+      return toPermissionStatus(permission);
     } catch {
       return 'denied';
     }
@@ -36,10 +34,8 @@ export const ScannerService = {
 
   async requestPermission(): Promise<PermissionStatusType> {
     try {
-      const perm = await MediaLibrary.requestPermissionsAsync();
-      if (perm.granted) return 'granted';
-      if (!perm.canAskAgain) return 'blocked';
-      return 'denied';
+      const permission = await MediaLibrary.requestPermissionsAsync(false, ['video']);
+      return toPermissionStatus(permission);
     } catch {
       return 'denied';
     }
@@ -48,75 +44,65 @@ export const ScannerService = {
   async scanAllVideos(): Promise<{ folders: VideoFolder[]; allVideos: VideoItem[] }> {
     const folderMap = new Map<string, VideoFolder>();
     const allVideos: VideoItem[] = [];
-
     const albums = await MediaLibrary.getAlbumsAsync({ includeSmartAlbums: true });
-    const albumNameLookup = new Map<string, string>();
-    for (const alb of albums) {
-      albumNameLookup.set(alb.id, alb.title);
-    }
+    const albumNames = new Map(albums.map((album) => [album.id, album.title]));
 
+    let after: string | undefined;
     let hasNextPage = true;
-    let endCursor: string | undefined = undefined;
-    let safetyPages = 0;
+    let pages = 0;
 
-    while (hasNextPage && safetyPages < 15) {
+    while (hasNextPage && pages < 100) {
       const page = await MediaLibrary.getAssetsAsync({
         mediaType: ['video'],
         first: 200,
-        after: endCursor,
+        ...(after ? { after } : {}),
         sortBy: [['modificationTime', false]],
       });
 
       for (const asset of page.assets) {
-        const albumTitle = asset.albumId ? albumNameLookup.get(asset.albumId) : undefined;
-        const folderName = extractFolderName(asset.uri, albumTitle);
-        const folderId = asset.albumId || `folder_${folderName.toLowerCase()}`;
-
-        const videoItem: VideoItem = {
+        const folderName = extractFolderName(asset.uri, asset.albumId ? albumNames.get(asset.albumId) : undefined);
+        const folderId = asset.albumId || ('folder_' + folderName.toLowerCase());
+        const item: VideoItem = {
           id: asset.id,
           filename: asset.filename,
           title: cleanVideoTitle(asset.filename),
           uri: asset.uri,
-          duration: Math.round((asset.duration || 0) * 1000),
-          width: asset.width || 1920,
-          height: asset.height || 1080,
-          creationTime: asset.creationTime || Date.now(),
-          modificationTime: asset.modificationTime || Date.now(),
+          duration: Math.max(0, Math.round((asset.duration || 0) * 1000)),
+          width: asset.width || 0,
+          height: asset.height || 0,
+          creationTime: asset.creationTime || 0,
+          modificationTime: asset.modificationTime || 0,
           albumId: folderId,
           folderName,
         };
+        allVideos.push(item);
 
-        allVideos.push(videoItem);
-
-        const existingFolder = folderMap.get(folderId);
-        if (existingFolder) {
-          existingFolder.videos.push(videoItem);
-          existingFolder.videoCount += 1;
-          existingFolder.totalDuration += videoItem.duration;
-          if (videoItem.modificationTime > existingFolder.lastModified) {
-            existingFolder.lastModified = videoItem.modificationTime;
-          }
+        const folder = folderMap.get(folderId);
+        if (folder) {
+          folder.videos.push(item);
+          folder.videoCount += 1;
+          folder.totalDuration += item.duration;
+          folder.lastModified = Math.max(folder.lastModified, item.modificationTime);
         } else {
           folderMap.set(folderId, {
             id: folderId,
             name: folderName,
             videoCount: 1,
-            totalDuration: videoItem.duration,
-            videos: [videoItem],
-            lastModified: videoItem.modificationTime,
+            totalDuration: item.duration,
+            videos: [item],
+            lastModified: item.modificationTime,
           });
         }
       }
 
       hasNextPage = page.hasNextPage;
-      endCursor = page.endCursor;
-      safetyPages += 1;
+      after = page.endCursor;
+      pages += 1;
     }
 
-    const folders = Array.from(folderMap.values()).sort(
-      (a, b) => b.lastModified - a.lastModified
-    );
-
-    return { folders, allVideos };
+    return {
+      folders: Array.from(folderMap.values()).sort((a, b) => b.lastModified - a.lastModified),
+      allVideos,
+    };
   },
 };
