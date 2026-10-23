@@ -52,7 +52,15 @@ export const VideoPlayerScreen: React.FC = () => {
       }
       void HardwareService.unlockOrientation();
     }
-    return () => { cancelled = true; };
+    return () => {
+      cancelled = true;
+      if (originalBrightness.current !== null) {
+        const valueToRestore = originalBrightness.current;
+        originalBrightness.current = null;
+        void HardwareService.setBrightness(valueToRestore);
+      }
+      void HardwareService.unlockOrientation();
+    };
   }, [Boolean(activeVideo)]);
 
   if (!activeVideo) return null;
