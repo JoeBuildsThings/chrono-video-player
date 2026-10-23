@@ -1,1198 +1,573 @@
 import React, { useMemo, useState } from 'react';
 import {
   ActivityIndicator,
+  Alert,
   FlatList,
-  Linking,
   Modal,
-  SafeAreaView,
+  Pressable,
+  RefreshControl,
+  ScrollView,
   StyleSheet,
   Text,
   TextInput,
   TouchableOpacity,
   View,
 } from 'react-native';
+import { SafeAreaView, useSafeAreaInsets } from 'react-native-safe-area-context';
+import { LinearGradient } from 'expo-linear-gradient';
 import { Ionicons } from '@expo/vector-icons';
+import Animated, { FadeIn, FadeInDown, FadeOut, SlideInDown, SlideOutDown } from 'react-native-reanimated';
 import * as DocumentPicker from 'expo-document-picker';
 import { useLibraryStore } from '../../store/useLibraryStore';
 import { usePlayerStore } from '../../store/usePlayerStore';
-import { StorageService } from '../../services/storage.service';
-import { GlassPanel } from '../common/GlassPanel';
+import { VideoFolder, VideoItem } from '../../core/types';
 import { PermissionGate } from './PermissionGate';
+import { GlassPanel } from '../common/GlassPanel';
 import { THEME } from '../../core/constants/theme';
 import { formatDurationMs } from '../../engine/gesture.math';
-import { SortField, VideoFolder, VideoItem } from '../../core/types';
-import { validateStreamUrl } from '../../core/errors/safeError';
 
-const SAMPLE_STREAMS = [
-  {
-    title: 'Big Buck Bunny (1080p MP4 Test)',
-    url: 'https://commondatastorage.googleapis.com/gtv-videos-bucket/sample/BigBuckBunny.mp4',
-  },
-  {
-    title: 'Tears of Steel (Sci-Fi Open Movie)',
-    url: 'https://commondatastorage.googleapis.com/gtv-videos-bucket/sample/TearsOfSteel.mp4',
-  },
-];
+function historyVideo(record: { videoId: string; uri: string; title: string; durationMs: number }): VideoItem {
+  const stream = /^https?:\/\//i.test(record.uri);
+  const name = record.title || record.uri.split('/').pop() || 'Video';
+  return {
+    id: record.videoId,
+    filename: name,
+    title: name.replace(/\.[^/.]+$/, ''),
+    uri: record.uri,
+    duration: record.durationMs || 0,
+    width: 0,
+    height: 0,
+    creationTime: 0,
+    modificationTime: 0,
+    albumId: stream ? 'network' : 'recent',
+    folderName: stream ? 'Network stream' : 'Recently played',
+    isNetworkStream: stream,
+  };
+}
 
-const GITHUB_PROFILE_URL = 'https://github.com/JoeBuildsThings';
-const GITHUB_REPO_URL = 'https://github.com/JoeBuildsThings/chrono-video-player';
+function shortDate(timestamp: number): string {
+  if (!timestamp) return 'On device';
+  const date = new Date(timestamp);
+  return date.toLocaleDateString(undefined, { month: 'short', day: 'numeric' });
+}
 
 export const LibraryScreen: React.FC = () => {
-  const {
-    permissionStatus,
-    isLoading,
-    folders,
-    allVideos,
-    selectedFolderId,
-    searchQuery,
-    sortField,
-    sortOrder,
-    viewMode,
-    historyMap,
-    recentStreams,
-    requestMediaPermission,
-    refreshLibrary,
-    selectFolder,
-    setSearchQuery,
-    setSorting,
-    setViewMode,
-    addStreamToHistory,
-  } = useLibraryStore();
-
+  const insets = useSafeAreaInsets();
+  const permissionStatus = useLibraryStore((s) => s.permissionStatus);
+  const isLoading = useLibraryStore((s) => s.isLoading);
+  const error = useLibraryStore((s) => s.error);
+  const folders = useLibraryStore((s) => s.folders);
+  const allVideos = useLibraryStore((s) => s.allVideos);
+  const selectedFolderId = useLibraryStore((s) => s.selectedFolderId);
+  const searchQuery = useLibraryStore((s) => s.searchQuery);
+  const sortField = useLibraryStore((s) => s.sortField);
+  const sortOrder = useLibraryStore((s) => s.sortOrder);
+  const viewMode = useLibraryStore((s) => s.viewMode);
+  const historyMap = useLibraryStore((s) => s.historyMap);
+  const recentStreams = useLibraryStore((s) => s.recentStreams);
+  const requestMediaPermission = useLibraryStore((s) => s.requestMediaPermission);
+  const refreshLibrary = useLibraryStore((s) => s.refreshLibrary);
+  const selectFolder = useLibraryStore((s) => s.selectFolder);
+  const setSearchQuery = useLibraryStore((s) => s.setSearchQuery);
+  const setSorting = useLibraryStore((s) => s.setSorting);
+  const setViewMode = useLibraryStore((s) => s.setViewMode);
+  const addStreamToHistory = useLibraryStore((s) => s.addStreamToHistory);
   const openVideo = usePlayerStore((s) => s.openVideo);
-  const isBackgroundAudioEnabled = usePlayerStore((s) => s.isBackgroundAudioEnabled);
-  const toggleBackgroundAudio = usePlayerStore((s) => s.toggleBackgroundAudio);
-  const decoderMode = usePlayerStore((s) => s.decoderMode);
-  const cycleDecoderMode = usePlayerStore((s) => s.cycleDecoderMode);
+  const [streamUrl, setStreamUrl] = useState('');
+  const [streamDialogVisible, setStreamDialogVisible] = useState(false);
+  const [settingsVisible, setSettingsVisible] = useState(false);
+  const [isPicking, setIsPicking] = useState(false);
 
-  const [streamInput, setStreamInput] = useState('');
-  const [streamError, setStreamError] = useState<string | null>(null);
-  const [isSettingsOpen, setIsSettingsOpen] = useState(false);
-
-  const activeFolder = useMemo(
-    () => folders.find((f) => f.id === selectedFolderId) || null,
+  const selectedFolder = useMemo(
+    () => folders.find((folder) => folder.id === selectedFolderId) || null,
     [folders, selectedFolderId]
   );
 
   const displayedVideos = useMemo(() => {
-    const source = activeFolder ? activeFolder.videos : allVideos;
-    const query = searchQuery.trim().toLowerCase();
-
-    const filtered = query
-      ? source.filter(
-          (v) =>
-            v.title.toLowerCase().includes(query) ||
-            v.folderName.toLowerCase().includes(query)
-        )
-      : [...source];
-
-    filtered.sort((a, b) => {
-      let comparison = 0;
-      if (sortField === 'title') {
-        comparison = a.title.localeCompare(b.title);
-      } else if (sortField === 'duration') {
-        comparison = a.duration - b.duration;
-      } else {
-        comparison = a.modificationTime - b.modificationTime;
-      }
-      return sortOrder === 'asc' ? comparison : -comparison;
+    let videos = selectedFolderId && viewMode === 'all'
+      ? (selectedFolder?.videos || [])
+      : allVideos;
+    const query = searchQuery.trim().toLocaleLowerCase();
+    if (query) {
+      videos = videos.filter((video) =>
+        video.title.toLocaleLowerCase().includes(query) ||
+        video.filename.toLocaleLowerCase().includes(query) ||
+        video.folderName.toLocaleLowerCase().includes(query)
+      );
+    }
+    const multiplier = sortOrder === 'asc' ? 1 : -1;
+    return [...videos].sort((a, b) => {
+      if (sortField === 'title') return multiplier * a.title.localeCompare(b.title);
+      if (sortField === 'duration') return multiplier * (a.duration - b.duration);
+      if (sortField === 'size') return multiplier * (a.width * a.height - b.width * b.height);
+      return multiplier * (a.modificationTime - b.modificationTime);
     });
+  }, [allVideos, selectedFolder, selectedFolderId, searchQuery, sortField, sortOrder, viewMode]);
 
-    return filtered;
-  }, [activeFolder, allVideos, searchQuery, sortField, sortOrder]);
+  const displayedFolders = useMemo(() => {
+    const query = searchQuery.trim().toLocaleLowerCase();
+    return folders.filter((folder) => !query || folder.name.toLocaleLowerCase().includes(query));
+  }, [folders, searchQuery]);
 
-  const handleOpenVideo = (video: VideoItem, queue: VideoItem[]) => {
-    const saved = historyMap[video.id];
-    const resumeMs =
-      saved && saved.lastPositionMs < saved.durationMs - 5000 ? saved.lastPositionMs : 0;
-    openVideo(video, queue, resumeMs);
-  };
+  const latestResume = useMemo(() => {
+    const record = Object.values(historyMap)
+      .filter((entry) => entry.lastPositionMs > 1000 && (!entry.durationMs || entry.durationMs - entry.lastPositionMs > 5000))
+      .sort((a, b) => b.updatedAt - a.updatedAt)[0];
+    if (!record) return null;
+    const item = allVideos.find((video) => video.id === record.videoId) || historyVideo(record);
+    return { record, item };
+  }, [historyMap, allVideos]);
 
-  const handlePickSingleFile = async () => {
+  const handlePickVideo = async () => {
+    if (isPicking) return;
+    setIsPicking(true);
     try {
       const result = await DocumentPicker.getDocumentAsync({
         type: ['video/*'],
-        copyToCacheDirectory: false,
+        copyToCacheDirectory: true,
+        multiple: false,
       });
-      if (result.canceled || !result.assets?.length) return;
-      const file = result.assets[0];
-      const customItem: VideoItem = {
-        id: `ext_${file.uri}`,
-        filename: file.name,
-        title: file.name.replace(/\.[^/.]+$/, ''),
-        uri: file.uri,
+      if (result.canceled || !result.assets?.[0]) return;
+      const asset = result.assets[0];
+      const item: VideoItem = {
+        id: 'picked_' + asset.uri,
+        filename: asset.name,
+        title: asset.name.replace(/\.[^/.]+$/, ''),
+        uri: asset.uri,
         duration: 0,
-        width: 1920,
-        height: 1080,
-        creationTime: Date.now(),
+        width: 0,
+        height: 0,
+        creationTime: 0,
         modificationTime: Date.now(),
-        albumId: 'external',
-        folderName: 'External Picker',
+        albumId: 'imported',
+        folderName: 'Imported files',
       };
-      handleOpenVideo(customItem, [customItem]);
-    } catch {
-      return;
+      openVideo(item, [item], 0);
+    } catch (pickError) {
+      Alert.alert('Could not open video', pickError instanceof Error ? pickError.message : 'Try selecting the file again.');
+    } finally {
+      setIsPicking(false);
     }
   };
 
-  const handleLaunchStream = async (rawUrl: string, customTitle?: string) => {
-    setStreamError(null);
-    const check = validateStreamUrl(rawUrl);
-    if (!check.ok || !check.data) {
-      setStreamError(check.error || 'Invalid stream URL');
+  const handleLaunchStream = () => {
+    const value = streamUrl.trim();
+    if (!/^https?:\/\/\S+$/i.test(value)) {
+      Alert.alert('Check the link', 'Enter a valid HTTP or HTTPS video link.');
       return;
     }
-    const cleanUrl = check.data;
-    await addStreamToHistory(cleanUrl);
-    const streamVideo: VideoItem = {
-      id: `net_${cleanUrl}`,
-      filename: cleanUrl.split('/').pop() || 'Network Stream',
-      title: customTitle || cleanUrl.split('/').pop() || 'VLC Network Stream',
-      uri: cleanUrl,
+    const item: VideoItem = {
+      id: 'stream_' + value,
+      filename: value.split('/').pop()?.split('?')[0] || 'Network stream',
+      title: value.split('/').pop()?.split('?')[0] || value,
+      uri: value,
       duration: 0,
-      width: 1920,
-      height: 1080,
-      creationTime: Date.now(),
+      width: 0,
+      height: 0,
+      creationTime: 0,
       modificationTime: Date.now(),
       albumId: 'network',
-      folderName: 'Network Stream',
+      folderName: 'Network stream',
       isNetworkStream: true,
     };
-    handleOpenVideo(streamVideo, [streamVideo]);
+    setStreamDialogVisible(false);
+    setStreamUrl('');
+    openVideo(item, [item], 0);
+    addStreamToHistory(value).catch(() => {
+      // Starting playback must not depend on optional recent-link storage.
+    });
   };
 
-  const cycleSortField = () => {
-    const order: SortField[] = ['date', 'title', 'duration'];
-    const nextField = order[(order.indexOf(sortField) + 1) % order.length];
-    setSorting(nextField, sortOrder);
+  const playItem = (item: VideoItem, queue: VideoItem[]) => {
+    const record = historyMap[item.id] || Object.values(historyMap).find((entry) => entry.uri === item.uri);
+    const safeQueue = queue.some((entry) => entry.id === item.id) ? queue : [item, ...queue];
+    openVideo(item, safeQueue, record?.lastPositionMs || 0);
   };
 
-  const toggleSortOrder = () => {
-    setSorting(sortField, sortOrder === 'asc' ? 'desc' : 'asc');
+  const requestClearHistory = () => {
+    Alert.alert('Clear watch history?', 'This removes saved resume positions on this device. Your videos will not be deleted.', [
+      { text: 'Cancel', style: 'cancel' },
+      {
+        text: 'Clear history',
+        style: 'destructive',
+        onPress: async () => {
+          try {
+            const { StorageService } = await import('../../services/storage.service');
+            await StorageService.clearAllHistory();
+            await refreshLibrary();
+          } catch (clearError) {
+            Alert.alert('Could not clear history', clearError instanceof Error ? clearError.message : 'Please try again.');
+          }
+        },
+      },
+    ]);
   };
 
-  const handleClearWatchHistory = async () => {
-    await StorageService.clearAllHistory();
-    await refreshLibrary();
-    setIsSettingsOpen(false);
-  };
-
-  const renderLastPlayedBanner = () => {
-    const records = Object.values(historyMap).sort((a, b) => b.updatedAt - a.updatedAt);
-    if (!records.length) return null;
-    const latest = records[0];
-    const targetVideo = allVideos.find((v) => v.id === latest.videoId);
-    if (!targetVideo) return null;
-
-    const progressPct =
-      latest.durationMs > 0
-        ? Math.min(100, Math.round((latest.lastPositionMs / latest.durationMs) * 100))
-        : 0;
-
+  const renderVideo = ({ item }: { item: VideoItem }) => {
+    const record = historyMap[item.id] || Object.values(historyMap).find((entry) => entry.uri === item.uri);
+    const ratio = record && record.durationMs > 0 ? Math.max(0, Math.min(1, record.lastPositionMs / record.durationMs)) : 0;
     return (
-      <TouchableOpacity
-        activeOpacity={0.85}
-        onPress={() => handleOpenVideo(targetVideo, allVideos)}
-        style={styles.resumeBannerWrapper}
-      >
-        <GlassPanel style={styles.resumeBanner} activeBorder>
-          <View style={styles.resumeRow}>
-            <View style={styles.resumePlayBadge}>
-              <Ionicons name="play" size={18} color={THEME.colors.textPrimary} />
+      <Pressable onPress={() => playItem(item, displayedVideos)} style={({ pressed }) => [styles.videoRow, pressed && styles.pressed]}>
+        <View style={styles.videoGlyph}>
+          <Ionicons name={item.isNetworkStream ? 'globe-outline' : 'play'} size={22} color={THEME.colors.accentCyan} />
+        </View>
+        <View style={styles.videoInfo}>
+          <Text numberOfLines={1} style={styles.videoTitle}>{item.title || item.filename}</Text>
+          <Text numberOfLines={1} style={styles.videoMeta}>
+            {item.folderName}  ·  {item.duration > 0 ? formatDurationMs(item.duration) : 'Duration loads on open'}
+          </Text>
+          {ratio > 0 && (
+            <View style={styles.resumeTrack}>
+              <View style={[styles.resumeFill, { width: (ratio * 100) + '%' }]} />
             </View>
-            <View style={styles.resumeInfo}>
-              <Text style={styles.resumeTag}>CONTINUE WATCHING • {progressPct}%</Text>
-              <Text style={styles.resumeTitle} numberOfLines={1}>
-                {targetVideo.title}
-              </Text>
-              <Text style={styles.resumeTime}>
-                {formatDurationMs(latest.lastPositionMs)} / {formatDurationMs(latest.durationMs)}
-              </Text>
-            </View>
-            <Ionicons name="chevron-forward" size={20} color={THEME.colors.accentCyan} />
-          </View>
-        </GlassPanel>
-      </TouchableOpacity>
+          )}
+        </View>
+        <View style={styles.videoRight}>
+          <Text style={styles.videoDate}>{record ? formatDurationMs(record.lastPositionMs) : shortDate(item.modificationTime)}</Text>
+          <Ionicons name="chevron-forward" size={17} color={THEME.colors.textMuted} />
+        </View>
+      </Pressable>
     );
   };
 
-  const renderFolderCard = ({ item }: { item: VideoFolder }) => (
-    <TouchableOpacity
-      activeOpacity={0.8}
-      onPress={() => selectFolder(item.id)}
-      style={styles.cardTouch}
+  const renderFolder = ({ item }: { item: VideoFolder }) => (
+    <Pressable
+      onPress={() => { setViewMode('all'); selectFolder(item.id); }}
+      style={({ pressed }) => [styles.folderRow, pressed && styles.pressed]}
     >
-      <GlassPanel style={styles.folderCard}>
-        <View style={styles.folderIconBox}>
-          <Ionicons name="folder" size={28} color={THEME.colors.accentElectric} />
-          <View style={styles.folderCountBadge}>
-            <Text style={styles.folderCountText}>{item.videoCount}</Text>
-          </View>
-        </View>
-        <View style={styles.folderMeta}>
-          <Text style={styles.folderTitle} numberOfLines={1}>
-            {item.name}
-          </Text>
-          <Text style={styles.folderSub}>
-            {item.videoCount} {item.videoCount === 1 ? 'video' : 'videos'} • Total{' '}
-            {formatDurationMs(item.totalDuration)}
-          </Text>
-        </View>
-        <Ionicons name="chevron-forward" size={18} color={THEME.colors.textMuted} />
-      </GlassPanel>
-    </TouchableOpacity>
+      <View style={styles.folderGlyph}>
+        <Ionicons name="folder-open" size={23} color={THEME.colors.accentCyan} />
+      </View>
+      <View style={styles.videoInfo}>
+        <Text numberOfLines={1} style={styles.videoTitle}>{item.name}</Text>
+        <Text style={styles.videoMeta}>{item.videoCount} {item.videoCount === 1 ? 'video' : 'videos'}  ·  {formatDurationMs(item.totalDuration)}</Text>
+      </View>
+      <Ionicons name="chevron-forward" size={18} color={THEME.colors.textMuted} />
+    </Pressable>
   );
 
-  const renderVideoCard = ({ item }: { item: VideoItem }) => {
-    const history = historyMap[item.id];
-    const progress =
-      history && item.duration > 0
-        ? Math.min(1, Math.max(0, history.lastPositionMs / item.duration))
-        : 0;
-    const isNew = !history && Date.now() - item.creationTime < 7 * 86400 * 1000;
-
-    return (
-      <TouchableOpacity
-        activeOpacity={0.8}
-        onPress={() => handleOpenVideo(item, displayedVideos)}
-        style={styles.cardTouch}
-      >
-        <GlassPanel style={styles.videoCard}>
-          <View style={styles.videoThumbBox}>
-            <Ionicons name="film-outline" size={24} color={THEME.colors.accentCyan} />
-            <Text style={styles.durationChip}>{formatDurationMs(item.duration)}</Text>
-            {progress > 0.02 && (
-              <View style={styles.thumbProgressTrack}>
-                <View style={[styles.thumbProgressFill, { width: `${progress * 100}%` }]} />
-              </View>
-            )}
-          </View>
-
-          <View style={styles.videoMeta}>
-            <View style={styles.videoTitleRow}>
-              {isNew && (
-                <View style={styles.newBadge}>
-                  <Text style={styles.newBadgeText}>NEW</Text>
-                </View>
-              )}
-              <Text style={styles.videoTitle} numberOfLines={2}>
-                {item.title}
-              </Text>
-            </View>
-
-            <View style={styles.videoSpecsRow}>
-              <Text style={styles.specBadge}>
-                {item.height >= 1080 ? 'FHD 1080p' : item.height >= 720 ? 'HD 720p' : 'SD'}
-              </Text>
-              <Text style={styles.specFolder} numberOfLines={1}>
-                {item.folderName}
-              </Text>
-              {history && (
-                <Text style={styles.specResume}>
-                  • {formatDurationMs(history.lastPositionMs)}
-                </Text>
-              )}
-            </View>
-          </View>
-
-          <Ionicons name="play-circle-outline" size={26} color={THEME.colors.accentElectric} />
-        </GlassPanel>
-      </TouchableOpacity>
-    );
+  const switchView = (mode: 'folders' | 'all' | 'streams') => {
+    setViewMode(mode);
+    setSearchQuery('');
   };
 
   return (
-    <SafeAreaView style={styles.safeArea}>
-      <View style={styles.topHeader}>
-        <View style={styles.brandRow}>
-          <View style={styles.logoOrb}>
-            <Ionicons name="play" size={18} color={THEME.colors.accentCyan} />
-          </View>
-          <View>
-            <Text style={styles.brandName}>CHRONO PLAYER</Text>
-            <Text style={styles.brandTag}>MX GESTURES • VLC CORE</Text>
-          </View>
-        </View>
-
-        <View style={styles.headerActions}>
-          <TouchableOpacity
-            style={styles.iconBtn}
-            onPress={handlePickSingleFile}
-            activeOpacity={0.75}
-          >
-            <Ionicons name="document-outline" size={20} color={THEME.colors.accentCyan} />
-          </TouchableOpacity>
-          <TouchableOpacity
-            style={styles.iconBtn}
-            onPress={refreshLibrary}
-            activeOpacity={0.75}
-          >
-            <Ionicons name="refresh-outline" size={20} color={THEME.colors.textPrimary} />
-          </TouchableOpacity>
-          <TouchableOpacity
-            style={styles.iconBtn}
-            onPress={() => setIsSettingsOpen(true)}
-            activeOpacity={0.75}
-          >
-            <Ionicons name="settings-outline" size={20} color={THEME.colors.accentCyan} />
-          </TouchableOpacity>
-        </View>
-      </View>
-
-      <View style={styles.tabBar}>
-        <TouchableOpacity
-          style={[styles.tabButton, viewMode === 'folders' && styles.tabButtonActive]}
-          onPress={() => setViewMode('folders')}
-        >
-          <Ionicons
-            name="folder-open-outline"
-            size={16}
-            color={viewMode === 'folders' ? THEME.colors.accentCyan : THEME.colors.textSecondary}
-          />
-          <Text style={[styles.tabText, viewMode === 'folders' && styles.tabTextActive]}>
-            Folders ({folders.length})
-          </Text>
-        </TouchableOpacity>
-
-        <TouchableOpacity
-          style={[styles.tabButton, viewMode === 'all' && styles.tabButtonActive]}
-          onPress={() => setViewMode('all')}
-        >
-          <Ionicons
-            name="grid-outline"
-            size={16}
-            color={viewMode === 'all' ? THEME.colors.accentCyan : THEME.colors.textSecondary}
-          />
-          <Text style={[styles.tabText, viewMode === 'all' && styles.tabTextActive]}>
-            All Videos ({allVideos.length})
-          </Text>
-        </TouchableOpacity>
-
-        <TouchableOpacity
-          style={[styles.tabButton, viewMode === 'streams' && styles.tabButtonActive]}
-          onPress={() => setViewMode('streams')}
-        >
-          <Ionicons
-            name="globe-outline"
-            size={16}
-            color={viewMode === 'streams' ? THEME.colors.accentCyan : THEME.colors.textSecondary}
-          />
-          <Text style={[styles.tabText, viewMode === 'streams' && styles.tabTextActive]}>
-            VLC Stream
-          </Text>
-        </TouchableOpacity>
-      </View>
-
-      {viewMode === 'streams' ? (
-        <View style={styles.streamContainer}>
-          <GlassPanel style={styles.streamPanel} heavy>
-            <Text style={styles.streamHeader}>Open Network Stream</Text>
-            <Text style={styles.streamSub}>
-              Enter direct HTTP, HTTPS, HLS (.m3u8), or RTSP media stream URL.
-            </Text>
-
-            <View style={styles.streamInputRow}>
-              <Ionicons name="link-outline" size={18} color={THEME.colors.accentCyan} />
-              <TextInput
-                style={styles.streamInput}
-                placeholder="https://example.com/stream.m3u8"
-                placeholderTextColor={THEME.colors.textMuted}
-                value={streamInput}
-                onChangeText={setStreamInput}
-                autoCapitalize="none"
-                autoCorrect={false}
-              />
-              {streamInput.length > 0 && (
-                <TouchableOpacity onPress={() => setStreamInput('')}>
-                  <Ionicons name="close-circle" size={18} color={THEME.colors.textMuted} />
-                </TouchableOpacity>
-              )}
+    <LinearGradient colors={['#061126', '#040812', '#070D1B']} style={styles.gradient}>
+      <SafeAreaView style={styles.safe} edges={['top', 'left', 'right']}>
+        <Animated.View entering={FadeIn.duration(350)} style={[styles.screen, { paddingBottom: Math.max(insets.bottom, 10) }]}>
+          <View style={styles.header}>
+            <View style={styles.brand}>
+              <LinearGradient colors={['#38BDF8', '#2563EB']} style={styles.brandMark}>
+                <Ionicons name="play" size={18} color="#FFFFFF" />
+              </LinearGradient>
+              <View>
+                <Text style={styles.brandTitle}>chrono<Text style={styles.brandAccent}>.</Text></Text>
+                <Text style={styles.brandSubtitle}>YOUR MEDIA, YOUR PACE</Text>
+              </View>
             </View>
+            <View style={styles.headerActions}>
+              <TouchableOpacity accessibilityLabel="Import video" style={styles.headerButton} onPress={handlePickVideo} disabled={isPicking}>
+                {isPicking ? <ActivityIndicator color={THEME.colors.accentCyan} /> : <Ionicons name="add" size={23} color={THEME.colors.textPrimary} />}
+              </TouchableOpacity>
+              <TouchableOpacity accessibilityLabel="Refresh library" style={styles.headerButton} onPress={() => refreshLibrary()}>
+                <Ionicons name="refresh-outline" size={20} color={THEME.colors.textPrimary} />
+              </TouchableOpacity>
+              <TouchableOpacity accessibilityLabel="Settings" style={styles.headerButton} onPress={() => setSettingsVisible(true)}>
+                <Ionicons name="options-outline" size={20} color={THEME.colors.textPrimary} />
+              </TouchableOpacity>
+            </View>
+          </View>
 
-            {streamError && <Text style={styles.errorText}>{streamError}</Text>}
-
-            <TouchableOpacity
-              style={styles.streamPlayBtn}
-              activeOpacity={0.85}
-              onPress={() => handleLaunchStream(streamInput)}
-            >
-              <Ionicons name="play" size={18} color={THEME.colors.textPrimary} />
-              <Text style={styles.streamPlayBtnText}>Launch Stream</Text>
-            </TouchableOpacity>
-          </GlassPanel>
-
-          <Text style={styles.sectionLabel}>QUICK TEST STREAMS</Text>
-          {SAMPLE_STREAMS.map((sample) => (
-            <TouchableOpacity
-              key={sample.url}
-              style={styles.cardTouch}
-              onPress={() => handleLaunchStream(sample.url, sample.title)}
-            >
-              <GlassPanel style={styles.sampleCard}>
-                <Ionicons name="radio-outline" size={20} color={THEME.colors.accentElectric} />
-                <View style={{ flex: 1 }}>
-                  <Text style={styles.sampleTitle}>{sample.title}</Text>
-                  <Text style={styles.sampleUrl} numberOfLines={1}>
-                    {sample.url}
-                  </Text>
-                </View>
-                <Ionicons name="play-circle" size={24} color={THEME.colors.accentCyan} />
-              </GlassPanel>
-            </TouchableOpacity>
-          ))}
-
-          {recentStreams.length > 0 && (
+          {permissionStatus === 'granted' ? (
             <>
-              <Text style={styles.sectionLabel}>RECENT STREAM HISTORY</Text>
-              <FlatList
-                data={recentStreams}
-                keyExtractor={(item) => item}
-                renderItem={({ item }) => (
-                  <TouchableOpacity
-                    style={styles.cardTouch}
-                    onPress={() => handleLaunchStream(item)}
-                  >
-                    <GlassPanel style={styles.sampleCard}>
-                      <Ionicons name="time-outline" size={18} color={THEME.colors.textSecondary} />
-                      <Text style={styles.sampleUrl} numberOfLines={1}>
-                        {item}
-                      </Text>
-                    </GlassPanel>
+              <View style={styles.hero}>
+                <Text style={styles.heroEyebrow}>YOUR LIBRARY</Text>
+                <Text style={styles.heroTitle}>Find your next{'\n'}frame.</Text>
+                <Text style={styles.heroCaption}>{allVideos.length.toLocaleString()} videos indexed on this device</Text>
+                <View style={styles.heroGlow} />
+              </View>
+
+              {latestResume && (
+                <Animated.View entering={FadeInDown.duration(280)}>
+                  <GlassPanel style={styles.resumeCard} intensity={28} heavy>
+                    <Pressable onPress={() => playItem(latestResume.item, [latestResume.item, ...allVideos.filter((video) => video.id !== latestResume.item.id)])} style={styles.resumeInner}>
+                      <View style={styles.resumeIcon}>
+                        <Ionicons name="play" size={18} color="#FFFFFF" />
+                      </View>
+                      <View style={styles.resumeText}>
+                        <Text style={styles.eyebrow}>CONTINUE WATCHING</Text>
+                        <Text numberOfLines={1} style={styles.resumeTitle}>{latestResume.record.title}</Text>
+                        <Text style={styles.resumeMeta}>Resume at {formatDurationMs(latestResume.record.lastPositionMs)}</Text>
+                      </View>
+                      <Ionicons name="arrow-forward" size={19} color={THEME.colors.accentCyan} />
+                    </Pressable>
+                  </GlassPanel>
+                </Animated.View>
+              )}
+
+              <View style={styles.searchRow}>
+                <Ionicons name="search-outline" size={19} color={THEME.colors.textMuted} />
+                <TextInput
+                  value={searchQuery}
+                  onChangeText={setSearchQuery}
+                  placeholder={viewMode === 'folders' ? 'Search folders' : 'Search your videos'}
+                  placeholderTextColor={THEME.colors.textMuted}
+                  style={styles.searchInput}
+                  returnKeyType="search"
+                  accessibilityLabel="Search media library"
+                />
+                {searchQuery.length > 0 && (
+                  <TouchableOpacity accessibilityLabel="Clear search" onPress={() => setSearchQuery('')}>
+                    <Ionicons name="close-circle" size={18} color={THEME.colors.textMuted} />
                   </TouchableOpacity>
                 )}
-              />
-            </>
-          )}
-        </View>
-      ) : permissionStatus !== 'granted' ? (
-        <PermissionGate
-          status={permissionStatus}
-          onRequestPermission={requestMediaPermission}
-          onOpenNetworkStream={() => setViewMode('streams')}
-          onPickExternalVideo={handlePickSingleFile}
-        />
-      ) : (
-        <View style={styles.mainContent}>
-          <View style={styles.searchSortBar}>
-            {activeFolder && (
-              <TouchableOpacity
-                style={styles.backFolderBtn}
-                onPress={() => selectFolder(null)}
-              >
-                <Ionicons name="arrow-back" size={18} color={THEME.colors.accentCyan} />
-              </TouchableOpacity>
-            )}
-
-            <View style={styles.searchBox}>
-              <Ionicons name="search-outline" size={16} color={THEME.colors.textSecondary} />
-              <TextInput
-                style={styles.searchInput}
-                placeholder={
-                  activeFolder ? `Search in ${activeFolder.name}...` : 'Search videos or folders...'
-                }
-                placeholderTextColor={THEME.colors.textMuted}
-                value={searchQuery}
-                onChangeText={setSearchQuery}
-              />
-              {searchQuery.length > 0 && (
-                <TouchableOpacity onPress={() => setSearchQuery('')}>
-                  <Ionicons name="close-circle" size={16} color={THEME.colors.textMuted} />
-                </TouchableOpacity>
-              )}
-            </View>
-
-            <TouchableOpacity style={styles.sortPill} onPress={cycleSortField}>
-              <Text style={styles.sortPillText}>{sortField.toUpperCase()}</Text>
-            </TouchableOpacity>
-
-            <TouchableOpacity style={styles.sortIconBtn} onPress={toggleSortOrder}>
-              <Ionicons
-                name={sortOrder === 'asc' ? 'arrow-up' : 'arrow-down'}
-                size={16}
-                color={THEME.colors.accentCyan}
-              />
-            </TouchableOpacity>
-          </View>
-
-          {renderLastPlayedBanner()}
-
-          {isLoading ? (
-            <View style={styles.centerBox}>
-              <ActivityIndicator size="large" color={THEME.colors.accentElectric} />
-              <Text style={styles.loadingText}>Indexing local media directories...</Text>
-            </View>
-          ) : viewMode === 'folders' && !activeFolder && !searchQuery.trim() ? (
-            <FlatList
-              data={folders}
-              keyExtractor={(item) => item.id}
-              renderItem={renderFolderCard}
-              contentContainerStyle={styles.listPadding}
-              ListEmptyComponent={
-                <View style={styles.centerBox}>
-                  <Ionicons name="videocam-off-outline" size={42} color={THEME.colors.textMuted} />
-                  <Text style={styles.emptyTitle}>No Video Folders Found</Text>
-                  <Text style={styles.emptySub}>
-                    Place video files on your device or use the VLC Stream tab.
-                  </Text>
-                </View>
-              }
-            />
-          ) : (
-            <FlatList
-              data={displayedVideos}
-              keyExtractor={(item) => item.id}
-              renderItem={renderVideoCard}
-              contentContainerStyle={styles.listPadding}
-              ListHeaderComponent={
-                activeFolder ? (
-                  <View style={styles.breadcrumbBar}>
-                    <Ionicons name="folder-open" size={16} color={THEME.colors.accentCyan} />
-                    <Text style={styles.breadcrumbText}>
-                      {activeFolder.name} ({displayedVideos.length})
-                    </Text>
-                  </View>
-                ) : undefined
-              }
-              ListEmptyComponent={
-                <View style={styles.centerBox}>
-                  <Text style={styles.emptyTitle}>No matching videos</Text>
-                </View>
-              }
-            />
-          )}
-        </View>
-      )}
-
-      <Modal
-        visible={isSettingsOpen}
-        transparent
-        animationType="fade"
-        onRequestClose={() => setIsSettingsOpen(false)}
-      >
-        <View style={styles.modalBackdrop}>
-          <GlassPanel style={styles.settingsSheet} intensity={55} heavy activeBorder>
-            <View style={styles.settingsHeader}>
-              <View style={styles.brandRow}>
-                <Ionicons name="settings-outline" size={20} color={THEME.colors.accentCyan} />
-                <Text style={styles.settingsTitle}>CHRONO PREFERENCES</Text>
               </View>
-              <TouchableOpacity
-                onPress={() => setIsSettingsOpen(false)}
-                style={styles.closeModalBtn}
-              >
+
+              <View style={styles.tabRow}>
+                {([
+                  { id: 'all', label: 'Videos', icon: 'film-outline' },
+                  { id: 'folders', label: 'Folders', icon: 'folder-outline' },
+                  { id: 'streams', label: 'Links', icon: 'globe-outline' },
+                ] as const).map((tab) => {
+                  const active = (tab.id === 'all' && viewMode === 'all' && !selectedFolderId) ||
+                    (tab.id === 'folders' && viewMode === 'folders') ||
+                    (tab.id === 'streams' && viewMode === 'streams') ||
+                    (tab.id === 'all' && !!selectedFolderId);
+                  return (
+                    <TouchableOpacity key={tab.id} onPress={() => switchView(tab.id === 'all' ? 'all' : tab.id === 'folders' ? 'folders' : 'streams')} style={[styles.tabButton, active && styles.tabActive]}>
+                      <Ionicons name={tab.icon as any} size={16} color={active ? THEME.colors.accentCyan : THEME.colors.textMuted} />
+                      <Text style={[styles.tabText, active && styles.tabTextActive]}>{tab.label}</Text>
+                    </TouchableOpacity>
+                  );
+                })}
+              </View>
+
+              {viewMode !== 'streams' && (
+                <View style={styles.listHeading}>
+                  <View style={styles.listHeadingLeft}>
+                    {selectedFolderId && (
+                      <TouchableOpacity accessibilityLabel="Back to all videos" onPress={() => setViewMode('folders')} style={styles.backButton}>
+                        <Ionicons name="arrow-back" size={16} color={THEME.colors.accentCyan} />
+                      </TouchableOpacity>
+                    )}
+                    <Text style={styles.sectionTitle}>{viewMode === 'folders' ? 'Folders' : selectedFolder?.name || 'All videos'}</Text>
+                    <Text style={styles.countText}>{viewMode === 'folders' ? displayedFolders.length : displayedVideos.length}</Text>
+                  </View>
+                  <TouchableOpacity accessibilityLabel="Change sort order" onPress={() => {
+                    if (sortOrder === 'asc') {
+                      setSorting(sortField, 'desc');
+                    } else {
+                      const fields = ['date', 'title', 'duration'] as const;
+                      const index = fields.indexOf(sortField as 'date' | 'title' | 'duration');
+                      setSorting(fields[(index + 1) % fields.length], 'asc');
+                    }
+                  }} style={styles.sortButton}>
+                    <Ionicons name="swap-vertical" size={16} color={THEME.colors.textSecondary} />
+                    <Text style={styles.sortText}>{sortField === 'date' ? 'Recent' : sortField === 'title' ? 'Title' : 'Duration'}</Text>
+                  </TouchableOpacity>
+                </View>
+              )}
+
+              {viewMode === 'streams' ? (
+                <ScrollView
+                  showsVerticalScrollIndicator={false}
+                  contentContainerStyle={styles.streamsContent}
+                  refreshControl={<RefreshControl refreshing={isLoading} onRefresh={() => refreshLibrary()} tintColor={THEME.colors.accentCyan} />}
+                >
+                  <GlassPanel style={styles.streamCard} intensity={24}>
+                    <View style={styles.streamIcon}><Ionicons name="link" size={22} color={THEME.colors.accentCyan} /></View>
+                    <Text style={styles.streamTitle}>Play from a link</Text>
+                    <Text style={styles.streamCaption}>Paste an HTTP, HTTPS or HLS video URL. Unsupported hosts or formats will report a playback error.</Text>
+                    <TextInput
+                      value={streamUrl}
+                      onChangeText={setStreamUrl}
+                      placeholder="https://example.com/video.mp4"
+                      placeholderTextColor={THEME.colors.textMuted}
+                      autoCapitalize="none"
+                      autoCorrect={false}
+                      keyboardType="url"
+                      style={styles.streamInput}
+                      accessibilityLabel="Video stream URL"
+                    />
+                    <TouchableOpacity style={styles.primaryButton} onPress={handleLaunchStream}>
+                      <Ionicons name="play" size={17} color="#FFFFFF" />
+                      <Text style={styles.primaryButtonText}>Play stream</Text>
+                    </TouchableOpacity>
+                  </GlassPanel>
+                  <Text style={styles.sectionTitle}>Recent links</Text>
+                  {recentStreams.length === 0 ? (
+                    <Text style={styles.emptyHint}>Streams you open will appear here.</Text>
+                  ) : recentStreams.map((url) => (
+                    <Pressable key={url} style={styles.recentStream} onPress={() => { setStreamUrl(url); }}>
+                      <View style={styles.videoGlyph}><Ionicons name="globe-outline" size={19} color={THEME.colors.accentCyan} /></View>
+                      <Text numberOfLines={2} style={styles.recentStreamText}>{url}</Text>
+                      <TouchableOpacity accessibilityLabel="Play recent stream" onPress={() => { setStreamUrl(url); const item: VideoItem = { id: 'stream_' + url, filename: url.split('/').pop()?.split('?')[0] || 'Network stream', title: url.split('/').pop()?.split('?')[0] || url, uri: url, duration: 0, width: 0, height: 0, creationTime: 0, modificationTime: Date.now(), albumId: 'network', folderName: 'Network stream', isNetworkStream: true }; openVideo(item, [item], 0); }} style={styles.playRecent}>
+                        <Ionicons name="play" size={17} color={THEME.colors.accentCyan} />
+                      </TouchableOpacity>
+                    </Pressable>
+                  ))}
+                </ScrollView>
+              ) : (
+                <FlatList
+                  style={styles.list}
+                  contentContainerStyle={styles.listContent}
+                  data={viewMode === 'folders' ? displayedFolders : displayedVideos}
+                  keyExtractor={(item) => item.id}
+                  renderItem={viewMode === 'folders' ? renderFolder as any : renderVideo as any}
+                  ListEmptyComponent={
+                    <View style={styles.emptyState}>
+                      <View style={styles.emptyIcon}><Ionicons name={viewMode === 'folders' ? 'folder-open-outline' : 'film-outline'} size={30} color={THEME.colors.accentCyan} /></View>
+                      <Text style={styles.emptyTitle}>{searchQuery ? 'Nothing matched' : 'Your library is quiet'}</Text>
+                      <Text style={styles.emptyHint}>{searchQuery ? 'Try a shorter title or folder name.' : 'Import a video or refresh after adding media to your device.'}</Text>
+                      <TouchableOpacity style={styles.secondaryButton} onPress={handlePickVideo}>
+                        <Ionicons name="add" size={18} color={THEME.colors.accentCyan} />
+                        <Text style={styles.secondaryButtonText}>Open a video file</Text>
+                      </TouchableOpacity>
+                    </View>
+                  }
+                  refreshControl={<RefreshControl refreshing={isLoading} onRefresh={() => refreshLibrary()} tintColor={THEME.colors.accentCyan} />}
+                  initialNumToRender={12}
+                  maxToRenderPerBatch={10}
+                  windowSize={7}
+                  keyboardShouldPersistTaps="handled"
+                />
+              )}
+
+              {isLoading && allVideos.length === 0 && (
+                <View style={styles.loading}><ActivityIndicator size="small" color={THEME.colors.accentCyan} /><Text style={styles.loadingText}>Scanning your library…</Text></View>
+              )}
+            </>
+          ) : (
+            <View style={styles.permissionArea}>
+              <PermissionGate
+                status={permissionStatus}
+                onRequestPermission={requestMediaPermission}
+                onOpenNetworkStream={() => setViewMode('streams')}
+                onPickExternalVideo={handlePickVideo}
+              />
+            </View>
+          )}
+
+          {error && (
+            <Animated.View entering={FadeInDown.duration(180)} exiting={FadeOut.duration(140)} style={styles.errorToast}>
+              <Ionicons name="alert-circle-outline" size={18} color="#FCA5A5" />
+              <Text style={styles.errorText}>{error}</Text>
+              <TouchableOpacity onPress={() => refreshLibrary()}><Ionicons name="refresh" size={17} color={THEME.colors.textPrimary} /></TouchableOpacity>
+            </Animated.View>
+          )}
+        </Animated.View>
+      </SafeAreaView>
+
+      <Modal visible={settingsVisible} transparent animationType="fade" onRequestClose={() => setSettingsVisible(false)}>
+        <View style={styles.modalBackdrop}>
+          <Animated.View entering={SlideInDown.duration(240)} exiting={SlideOutDown.duration(180)} style={styles.settingsSheet}>
+            <View style={styles.modalHandle} />
+            <View style={styles.modalHeader}>
+              <Text style={styles.modalTitle}>Library settings</Text>
+              <TouchableOpacity accessibilityLabel="Close settings" onPress={() => setSettingsVisible(false)} style={styles.headerButton}>
                 <Ionicons name="close" size={20} color={THEME.colors.textPrimary} />
               </TouchableOpacity>
             </View>
-
-            <TouchableOpacity style={styles.prefRow} onPress={cycleDecoderMode}>
-              <View>
-                <Text style={styles.prefLabel}>Default Hardware Decoder</Text>
-                <Text style={styles.prefSub}>Switch between HW+, HW, and Software decoding</Text>
-              </View>
-              <View style={styles.prefBadge}>
-                <Text style={styles.prefBadgeText}>{decoderMode}</Text>
-              </View>
+            <TouchableOpacity style={styles.settingsRow} onPress={() => { setSettingsVisible(false); refreshLibrary(); }}>
+              <Ionicons name="refresh-outline" size={20} color={THEME.colors.accentCyan} />
+              <View style={styles.settingsCopy}><Text style={styles.settingsTitle}>Rescan library</Text><Text style={styles.settingsMeta}>Find videos recently added to your device</Text></View>
+              <Ionicons name="chevron-forward" size={17} color={THEME.colors.textMuted} />
             </TouchableOpacity>
-
-            <TouchableOpacity style={styles.prefRow} onPress={toggleBackgroundAudio}>
-              <View>
-                <Text style={styles.prefLabel}>Background Audio Playback</Text>
-                <Text style={styles.prefSub}>Keep playing audio when app is minimized</Text>
-              </View>
-              <View style={styles.prefBadge}>
-                <Text style={styles.prefBadgeText}>
-                  {isBackgroundAudioEnabled ? 'ON' : 'OFF'}
-                </Text>
-              </View>
+            <TouchableOpacity style={styles.settingsRow} onPress={() => { setSettingsVisible(false); requestClearHistory(); }}>
+              <Ionicons name="trash-outline" size={20} color="#FCA5A5" />
+              <View style={styles.settingsCopy}><Text style={styles.settingsTitle}>Clear watch history</Text><Text style={styles.settingsMeta}>Removes resume points, not video files</Text></View>
+              <Ionicons name="chevron-forward" size={17} color={THEME.colors.textMuted} />
             </TouchableOpacity>
-
-            <TouchableOpacity style={styles.prefRow} onPress={handleClearWatchHistory}>
-              <View>
-                <Text style={styles.prefLabel}>Clear Resume Watch History</Text>
-                <Text style={styles.prefSub}>Reset saved timestamps for all local videos</Text>
-              </View>
-              <Ionicons name="trash-outline" size={18} color={THEME.colors.statusDanger} />
-            </TouchableOpacity>
-
-            <View style={styles.settingsDivider} />
-
-            <TouchableOpacity
-              style={styles.githubCard}
-              activeOpacity={0.85}
-              onPress={() => Linking.openURL(GITHUB_PROFILE_URL)}
-            >
-              <Ionicons name="logo-github" size={26} color={THEME.colors.textPrimary} />
-              <View style={{ flex: 1 }}>
-                <Text style={styles.githubCardTitle}>@JoeBuildsThings</Text>
-                <Text style={styles.githubCardSub}>
-                  View Developer Profile & Projects on GitHub
-                </Text>
-              </View>
-              <Ionicons name="open-outline" size={18} color={THEME.colors.accentCyan} />
-            </TouchableOpacity>
-
-            <TouchableOpacity
-              style={styles.repoLinkBtn}
-              activeOpacity={0.8}
-              onPress={() => Linking.openURL(GITHUB_REPO_URL)}
-            >
-              <Ionicons name="git-branch-outline" size={16} color={THEME.colors.accentCyan} />
-              <Text style={styles.repoLinkText}>
-                github.com/JoeBuildsThings/chrono-video-player
-              </Text>
-            </TouchableOpacity>
-          </GlassPanel>
+            <Text style={styles.privacyNote}>Your library and watch history stay on this device. Chrono Player does not require an account.</Text>
+          </Animated.View>
         </View>
       </Modal>
-    </SafeAreaView>
+    </LinearGradient>
   );
 };
 
 const styles = StyleSheet.create({
-  safeArea: {
-    flex: 1,
-    backgroundColor: THEME.colors.bgAbyss,
-  },
-  topHeader: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    justifyContent: 'space-between',
-    paddingHorizontal: THEME.spacing.lg,
-    paddingTop: THEME.spacing.md,
-    paddingBottom: THEME.spacing.sm,
-  },
-  brandRow: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    gap: THEME.spacing.sm,
-  },
-  logoOrb: {
-    width: 38,
-    height: 38,
-    borderRadius: 12,
-    backgroundColor: THEME.colors.glassSurfaceLight,
-    borderWidth: 1,
-    borderColor: THEME.colors.accentElectric,
-    justifyContent: 'center',
-    alignItems: 'center',
-  },
-  brandName: {
-    color: THEME.colors.textPrimary,
-    fontSize: 16,
-    fontWeight: '800',
-    letterSpacing: 1.1,
-  },
-  brandTag: {
-    color: THEME.colors.accentCyan,
-    fontSize: 10,
-    fontWeight: '600',
-    letterSpacing: 0.8,
-  },
-  headerActions: {
-    flexDirection: 'row',
-    gap: THEME.spacing.sm,
-  },
-  iconBtn: {
-    width: 38,
-    height: 38,
-    borderRadius: THEME.radius.md,
-    backgroundColor: THEME.colors.glassSurface,
-    borderWidth: 1,
-    borderColor: THEME.colors.borderSpecular,
-    justifyContent: 'center',
-    alignItems: 'center',
-  },
-  tabBar: {
-    flexDirection: 'row',
-    paddingHorizontal: THEME.spacing.lg,
-    gap: THEME.spacing.sm,
-    marginBottom: THEME.spacing.sm,
-  },
-  tabButton: {
-    flex: 1,
-    flexDirection: 'row',
-    alignItems: 'center',
-    justifyContent: 'center',
-    gap: 6,
-    paddingVertical: 10,
-    borderRadius: THEME.radius.md,
-    backgroundColor: THEME.colors.glassSurface,
-    borderWidth: 1,
-    borderColor: THEME.colors.borderSubtle,
-  },
-  tabButtonActive: {
-    backgroundColor: THEME.colors.glassSurfaceLight,
-    borderColor: THEME.colors.accentElectric,
-  },
-  tabText: {
-    fontSize: 12,
-    fontWeight: '600',
-    color: THEME.colors.textSecondary,
-  },
-  tabTextActive: {
-    color: THEME.colors.textPrimary,
-    fontWeight: '700',
-  },
-  mainContent: {
-    flex: 1,
-  },
-  searchSortBar: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    paddingHorizontal: THEME.spacing.lg,
-    gap: THEME.spacing.sm,
-    marginBottom: THEME.spacing.sm,
-  },
-  backFolderBtn: {
-    width: 38,
-    height: 38,
-    borderRadius: THEME.radius.md,
-    backgroundColor: THEME.colors.glassSurfaceLight,
-    borderWidth: 1,
-    borderColor: THEME.colors.borderSpecular,
-    justifyContent: 'center',
-    alignItems: 'center',
-  },
-  searchBox: {
-    flex: 1,
-    flexDirection: 'row',
-    alignItems: 'center',
-    backgroundColor: THEME.colors.glassSurface,
-    borderWidth: 1,
-    borderColor: THEME.colors.borderSpecular,
-    borderRadius: THEME.radius.md,
-    paddingHorizontal: THEME.spacing.md,
-    height: 38,
-    gap: 8,
-  },
-  searchInput: {
-    flex: 1,
-    color: THEME.colors.textPrimary,
-    fontSize: 13,
-  },
-  sortPill: {
-    height: 38,
-    paddingHorizontal: 10,
-    borderRadius: THEME.radius.md,
-    backgroundColor: THEME.colors.glassSurface,
-    borderWidth: 1,
-    borderColor: THEME.colors.borderSpecular,
-    justifyContent: 'center',
-  },
-  sortPillText: {
-    color: THEME.colors.accentCyan,
-    fontSize: 11,
-    fontWeight: '700',
-  },
-  sortIconBtn: {
-    width: 38,
-    height: 38,
-    borderRadius: THEME.radius.md,
-    backgroundColor: THEME.colors.glassSurface,
-    borderWidth: 1,
-    borderColor: THEME.colors.borderSpecular,
-    justifyContent: 'center',
-    alignItems: 'center',
-  },
-  resumeBannerWrapper: {
-    paddingHorizontal: THEME.spacing.lg,
-    marginBottom: THEME.spacing.sm,
-  },
-  resumeBanner: {
-    padding: THEME.spacing.md,
-  },
-  resumeRow: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    gap: THEME.spacing.md,
-  },
-  resumePlayBadge: {
-    width: 40,
-    height: 40,
-    borderRadius: 20,
-    backgroundColor: THEME.colors.accentCobalt,
-    justifyContent: 'center',
-    alignItems: 'center',
-  },
-  resumeInfo: {
-    flex: 1,
-  },
-  resumeTag: {
-    fontSize: 10,
-    fontWeight: '800',
-    color: THEME.colors.accentCyan,
-    letterSpacing: 0.7,
-  },
-  resumeTitle: {
-    fontSize: 14,
-    fontWeight: '700',
-    color: THEME.colors.textPrimary,
-    marginVertical: 2,
-  },
-  resumeTime: {
-    fontSize: 11,
-    color: THEME.colors.textSecondary,
-    fontFamily: THEME.typography.monoFamily,
-  },
-  listPadding: {
-    paddingHorizontal: THEME.spacing.lg,
-    paddingBottom: 110,
-  },
-  cardTouch: {
-    marginBottom: THEME.spacing.sm,
-  },
-  folderCard: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    padding: THEME.spacing.md,
-    gap: THEME.spacing.md,
-  },
-  folderIconBox: {
-    width: 48,
-    height: 48,
-    borderRadius: THEME.radius.md,
-    backgroundColor: 'rgba(14, 165, 233, 0.12)',
-    borderWidth: 1,
-    borderColor: THEME.colors.borderSpecular,
-    justifyContent: 'center',
-    alignItems: 'center',
-  },
-  folderCountBadge: {
-    position: 'absolute',
-    bottom: -4,
-    right: -4,
-    backgroundColor: THEME.colors.accentCobalt,
-    paddingHorizontal: 5,
-    paddingVertical: 1,
-    borderRadius: 8,
-    borderWidth: 1,
-    borderColor: THEME.colors.accentCyan,
-  },
-  folderCountText: {
-    fontSize: 10,
-    fontWeight: '800',
-    color: THEME.colors.textPrimary,
-  },
-  folderMeta: {
-    flex: 1,
-  },
-  folderTitle: {
-    fontSize: 15,
-    fontWeight: '700',
-    color: THEME.colors.textPrimary,
-    marginBottom: 3,
-  },
-  folderSub: {
-    fontSize: 12,
-    color: THEME.colors.textSecondary,
-  },
-  videoCard: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    padding: THEME.spacing.md,
-    gap: THEME.spacing.md,
-  },
-  videoThumbBox: {
-    width: 78,
-    height: 54,
-    borderRadius: THEME.radius.sm,
-    backgroundColor: '#050C1E',
-    borderWidth: 1,
-    borderColor: THEME.colors.borderSpecular,
-    justifyContent: 'center',
-    alignItems: 'center',
-    overflow: 'hidden',
-  },
-  durationChip: {
-    position: 'absolute',
-    bottom: 4,
-    right: 4,
-    backgroundColor: 'rgba(4, 8, 18, 0.85)',
-    paddingHorizontal: 4,
-    paddingVertical: 1,
-    borderRadius: 4,
-    fontSize: 9,
-    color: THEME.colors.textPrimary,
-    fontFamily: THEME.typography.monoFamily,
-  },
-  thumbProgressTrack: {
-    position: 'absolute',
-    bottom: 0,
-    left: 0,
-    right: 0,
-    height: 3,
-    backgroundColor: 'rgba(255,255,255,0.15)',
-  },
-  thumbProgressFill: {
-    height: '100%',
-    backgroundColor: THEME.colors.accentElectric,
-  },
-  videoMeta: {
-    flex: 1,
-    gap: 4,
-  },
-  videoTitleRow: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    gap: 6,
-  },
-  newBadge: {
-    backgroundColor: THEME.colors.accentCobalt,
-    paddingHorizontal: 5,
-    paddingVertical: 1,
-    borderRadius: 4,
-  },
-  newBadgeText: {
-    fontSize: 9,
-    fontWeight: '800',
-    color: THEME.colors.accentCyan,
-  },
-  videoTitle: {
-    flex: 1,
-    fontSize: 14,
-    fontWeight: '600',
-    color: THEME.colors.textPrimary,
-  },
-  videoSpecsRow: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    gap: 6,
-  },
-  specBadge: {
-    fontSize: 10,
-    fontWeight: '700',
-    color: THEME.colors.accentCyan,
-    backgroundColor: 'rgba(56, 189, 248, 0.12)',
-    paddingHorizontal: 5,
-    paddingVertical: 1,
-    borderRadius: 4,
-  },
-  specFolder: {
-    fontSize: 11,
-    color: THEME.colors.textSecondary,
-    maxWidth: 110,
-  },
-  specResume: {
-    fontSize: 11,
-    color: THEME.colors.accentElectric,
-    fontFamily: THEME.typography.monoFamily,
-  },
-  breadcrumbBar: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    gap: 6,
-    marginBottom: THEME.spacing.sm,
-    paddingVertical: 4,
-  },
-  breadcrumbText: {
-    color: THEME.colors.accentCyan,
-    fontSize: 13,
-    fontWeight: '700',
-  },
-  centerBox: {
-    flex: 1,
-    justifyContent: 'center',
-    alignItems: 'center',
-    padding: THEME.spacing.xl,
-    gap: 8,
-  },
-  loadingText: {
-    color: THEME.colors.textSecondary,
-    fontSize: 13,
-  },
-  emptyTitle: {
-    color: THEME.colors.textPrimary,
-    fontSize: 16,
-    fontWeight: '700',
-  },
-  emptySub: {
-    color: THEME.colors.textSecondary,
-    fontSize: 13,
-    textAlign: 'center',
-  },
-  streamContainer: {
-    flex: 1,
-    paddingHorizontal: THEME.spacing.lg,
-  },
-  streamPanel: {
-    padding: THEME.spacing.lg,
-    marginBottom: THEME.spacing.lg,
-  },
-  streamHeader: {
-    fontSize: 17,
-    fontWeight: '700',
-    color: THEME.colors.textPrimary,
-    marginBottom: 4,
-  },
-  streamSub: {
-    fontSize: 12,
-    color: THEME.colors.textSecondary,
-    marginBottom: THEME.spacing.md,
-  },
-  streamInputRow: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    backgroundColor: 'rgba(4, 8, 18, 0.75)',
-    borderWidth: 1,
-    borderColor: THEME.colors.borderSpecular,
-    borderRadius: THEME.radius.md,
-    paddingHorizontal: THEME.spacing.md,
-    height: 44,
-    gap: 8,
-    marginBottom: THEME.spacing.sm,
-  },
-  streamInput: {
-    flex: 1,
-    color: THEME.colors.textPrimary,
-    fontSize: 13,
-    fontFamily: THEME.typography.monoFamily,
-  },
-  errorText: {
-    color: THEME.colors.statusDanger,
-    fontSize: 12,
-    marginBottom: THEME.spacing.sm,
-  },
-  streamPlayBtn: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    justifyContent: 'center',
-    gap: 8,
-    backgroundColor: THEME.colors.accentCobalt,
-    paddingVertical: 12,
-    borderRadius: THEME.radius.md,
-    borderWidth: 1,
-    borderColor: THEME.colors.accentCyan,
-  },
-  streamPlayBtnText: {
-    color: THEME.colors.textPrimary,
-    fontWeight: '700',
-    fontSize: 14,
-  },
-  sectionLabel: {
-    fontSize: 11,
-    fontWeight: '800',
-    color: THEME.colors.textMuted,
-    letterSpacing: 0.9,
-    marginBottom: THEME.spacing.sm,
-    marginTop: THEME.spacing.xs,
-  },
-  sampleCard: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    padding: THEME.spacing.md,
-    gap: THEME.spacing.md,
-  },
-  sampleTitle: {
-    fontSize: 13,
-    fontWeight: '700',
-    color: THEME.colors.textPrimary,
-  },
-  sampleUrl: {
-    fontSize: 11,
-    color: THEME.colors.textSecondary,
-    fontFamily: THEME.typography.monoFamily,
-  },
-  modalBackdrop: {
-    flex: 1,
-    backgroundColor: 'rgba(2, 6, 16, 0.75)',
-    justifyContent: 'center',
-    alignItems: 'center',
-    padding: THEME.spacing.lg,
-  },
-  settingsSheet: {
-    width: '100%',
-    maxWidth: 440,
-    padding: THEME.spacing.lg,
-    gap: THEME.spacing.sm,
-  },
-  settingsHeader: {
-    flexDirection: 'row',
-    justifyContent: 'space-between',
-    alignItems: 'center',
-    marginBottom: THEME.spacing.sm,
-  },
-  settingsTitle: {
-    color: THEME.colors.textPrimary,
-    fontSize: 15,
-    fontWeight: '800',
-    letterSpacing: 0.8,
-  },
-  closeModalBtn: {
-    width: 32,
-    height: 32,
-    borderRadius: 16,
-    backgroundColor: THEME.colors.glassSurfaceLight,
-    justifyContent: 'center',
-    alignItems: 'center',
-  },
-  prefRow: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    justifyContent: 'space-between',
-    padding: THEME.spacing.md,
-    borderRadius: THEME.radius.md,
-    backgroundColor: 'rgba(4, 8, 18, 0.6)',
-    borderWidth: 1,
-    borderColor: THEME.colors.borderSubtle,
-  },
-  prefLabel: {
-    color: THEME.colors.textPrimary,
-    fontSize: 13,
-    fontWeight: '700',
-  },
-  prefSub: {
-    color: THEME.colors.textSecondary,
-    fontSize: 11,
-    marginTop: 2,
-  },
-  prefBadge: {
-    backgroundColor: THEME.colors.accentCobalt,
-    paddingHorizontal: 10,
-    paddingVertical: 4,
-    borderRadius: THEME.radius.sm,
-    borderWidth: 1,
-    borderColor: THEME.colors.accentCyan,
-  },
-  prefBadgeText: {
-    color: THEME.colors.textPrimary,
-    fontSize: 11,
-    fontWeight: '800',
-  },
-  settingsDivider: {
-    height: 1,
-    backgroundColor: THEME.colors.borderSubtle,
-    marginVertical: THEME.spacing.xs,
-  },
-  githubCard: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    gap: 12,
-    padding: THEME.spacing.md,
-    borderRadius: THEME.radius.md,
-    backgroundColor: THEME.colors.glassSurfaceLight,
-    borderWidth: 1,
-    borderColor: THEME.colors.accentElectric,
-  },
-  githubCardTitle: {
-    color: THEME.colors.textPrimary,
-    fontSize: 14,
-    fontWeight: '800',
-  },
-  githubCardSub: {
-    color: THEME.colors.accentCyan,
-    fontSize: 11,
-    marginTop: 1,
-  },
-  repoLinkBtn: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    justifyContent: 'center',
-    gap: 6,
-    paddingVertical: 8,
-  },
-  repoLinkText: {
-    color: THEME.colors.textSecondary,
-    fontSize: 11,
-    fontFamily: THEME.typography.monoFamily,
-  },
+  gradient: { flex: 1, backgroundColor: THEME.colors.bgAbyss },
+  safe: { flex: 1 },
+  screen: { flex: 1, paddingHorizontal: 18, paddingTop: 8 },
+  header: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', marginBottom: 16 },
+  brand: { flexDirection: 'row', alignItems: 'center', gap: 10 },
+  brandMark: { width: 38, height: 38, borderRadius: 13, alignItems: 'center', justifyContent: 'center' },
+  brandTitle: { color: THEME.colors.textPrimary, fontSize: 23, fontWeight: '800', letterSpacing: -0.9 },
+  brandAccent: { color: THEME.colors.accentCyan },
+  brandSubtitle: { color: THEME.colors.textMuted, fontSize: 8, letterSpacing: 1.6, fontWeight: '700', marginTop: -1 },
+  headerActions: { flexDirection: 'row', gap: 7 },
+  headerButton: { width: 40, height: 40, borderRadius: 15, alignItems: 'center', justifyContent: 'center', backgroundColor: 'rgba(19, 40, 77, 0.72)', borderWidth: 1, borderColor: 'rgba(56,189,248,0.13)' },
+  hero: { borderRadius: 23, overflow: 'hidden', backgroundColor: '#0B1A36', paddingHorizontal: 20, paddingVertical: 18, minHeight: 138, justifyContent: 'center', borderWidth: 1, borderColor: 'rgba(56,189,248,0.17)', marginBottom: 13 },
+  heroEyebrow: { color: THEME.colors.accentCyan, fontSize: 9, fontWeight: '800', letterSpacing: 2, marginBottom: 8 },
+  heroTitle: { color: '#F8FAFC', fontSize: 29, lineHeight: 31, fontWeight: '800', letterSpacing: -0.9 },
+  heroCaption: { color: '#9FB0C9', fontSize: 11, marginTop: 8 },
+  heroGlow: { position: 'absolute', width: 150, height: 150, borderRadius: 75, right: -37, top: -50, backgroundColor: 'rgba(37,99,235,0.18)' },
+  resumeCard: { marginBottom: 14, borderRadius: 17 },
+  resumeInner: { flexDirection: 'row', alignItems: 'center', padding: 12, gap: 12 },
+  resumeIcon: { width: 40, height: 40, borderRadius: 14, backgroundColor: THEME.colors.accentCobalt, alignItems: 'center', justifyContent: 'center' },
+  resumeText: { flex: 1, gap: 3 },
+  eyebrow: { color: THEME.colors.accentCyan, fontSize: 8, fontWeight: '800', letterSpacing: 1.5 },
+  resumeTitle: { color: THEME.colors.textPrimary, fontSize: 13, fontWeight: '700' },
+  resumeMeta: { color: THEME.colors.textSecondary, fontSize: 10 },
+  searchRow: { height: 46, borderRadius: 15, backgroundColor: 'rgba(9,19,39,0.86)', borderWidth: 1, borderColor: 'rgba(148,163,184,0.13)', flexDirection: 'row', alignItems: 'center', gap: 10, paddingHorizontal: 13, marginBottom: 12 },
+  searchInput: { flex: 1, color: THEME.colors.textPrimary, fontSize: 13, paddingVertical: 0 },
+  tabRow: { flexDirection: 'row', backgroundColor: 'rgba(9,18,36,0.8)', borderRadius: 15, padding: 4, marginBottom: 15, borderWidth: 1, borderColor: 'rgba(148,163,184,0.08)' },
+  tabButton: { flex: 1, flexDirection: 'row', alignItems: 'center', justifyContent: 'center', gap: 6, paddingVertical: 10, borderRadius: 11 },
+  tabActive: { backgroundColor: 'rgba(37,99,235,0.22)', borderWidth: 1, borderColor: 'rgba(56,189,248,0.18)' },
+  tabText: { color: THEME.colors.textMuted, fontSize: 11, fontWeight: '700' },
+  tabTextActive: { color: THEME.colors.textPrimary },
+  listHeading: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', marginBottom: 7, paddingHorizontal: 2 },
+  listHeadingLeft: { flexDirection: 'row', gap: 8, alignItems: 'center' },
+  sectionTitle: { color: THEME.colors.textPrimary, fontWeight: '800', fontSize: 16 },
+  countText: { color: THEME.colors.textMuted, fontSize: 11 },
+  backButton: { width: 27, height: 27, justifyContent: 'center', alignItems: 'center', borderRadius: 9, backgroundColor: 'rgba(56,189,248,0.1)' },
+  sortButton: { flexDirection: 'row', alignItems: 'center', gap: 4, paddingVertical: 5, paddingHorizontal: 7 },
+  sortText: { color: THEME.colors.textSecondary, fontSize: 10, fontWeight: '700' },
+  list: { flex: 1 },
+  listContent: { paddingBottom: 18, flexGrow: 1 },
+  videoRow: { flexDirection: 'row', alignItems: 'center', borderRadius: 15, marginBottom: 7, paddingHorizontal: 10, paddingVertical: 11, gap: 11, backgroundColor: 'rgba(14,28,54,0.64)', borderWidth: 1, borderColor: 'rgba(148,163,184,0.08)' },
+  folderRow: { flexDirection: 'row', alignItems: 'center', borderRadius: 15, marginBottom: 7, paddingHorizontal: 10, paddingVertical: 13, gap: 11, backgroundColor: 'rgba(14,28,54,0.64)', borderWidth: 1, borderColor: 'rgba(148,163,184,0.08)' },
+  pressed: { opacity: 0.72, transform: [{ scale: 0.99 }] },
+  videoGlyph: { width: 42, height: 42, borderRadius: 13, alignItems: 'center', justifyContent: 'center', backgroundColor: 'rgba(14,165,233,0.1)', borderWidth: 1, borderColor: 'rgba(56,189,248,0.13)' },
+  folderGlyph: { width: 42, height: 42, borderRadius: 13, alignItems: 'center', justifyContent: 'center', backgroundColor: 'rgba(37,99,235,0.14)' },
+  videoInfo: { flex: 1, gap: 4 },
+  videoTitle: { color: THEME.colors.textPrimary, fontSize: 12, fontWeight: '700' },
+  videoMeta: { color: THEME.colors.textMuted, fontSize: 10 },
+  videoRight: { flexDirection: 'row', alignItems: 'center', gap: 5 },
+  videoDate: { color: THEME.colors.textMuted, fontSize: 9 },
+  resumeTrack: { height: 2, borderRadius: 2, backgroundColor: 'rgba(255,255,255,0.12)', marginTop: 2, overflow: 'hidden' },
+  resumeFill: { height: '100%', backgroundColor: THEME.colors.accentCyan },
+  streamsContent: { gap: 13, paddingBottom: 30 },
+  streamCard: { padding: 16, borderRadius: 19, gap: 8 },
+  streamIcon: { width: 45, height: 45, borderRadius: 15, backgroundColor: 'rgba(14,165,233,0.12)', justifyContent: 'center', alignItems: 'center', marginBottom: 2 },
+  streamTitle: { color: THEME.colors.textPrimary, fontSize: 17, fontWeight: '800' },
+  streamCaption: { color: THEME.colors.textSecondary, fontSize: 11, lineHeight: 17 },
+  streamInput: { height: 45, borderRadius: 12, color: THEME.colors.textPrimary, backgroundColor: 'rgba(4,8,18,0.7)', borderWidth: 1, borderColor: THEME.colors.borderSpecular, paddingHorizontal: 12, fontSize: 12, marginTop: 5 },
+  primaryButton: { flexDirection: 'row', alignItems: 'center', justifyContent: 'center', gap: 8, minHeight: 45, borderRadius: 13, backgroundColor: '#1769DE', paddingHorizontal: 14, marginTop: 5 },
+  primaryButtonText: { color: '#FFFFFF', fontSize: 12, fontWeight: '800' },
+  recentStream: { flexDirection: 'row', alignItems: 'center', gap: 9, padding: 9, borderRadius: 13, backgroundColor: 'rgba(14,28,54,0.64)', borderWidth: 1, borderColor: 'rgba(148,163,184,0.08)' },
+  recentStreamText: { flex: 1, fontSize: 10, color: THEME.colors.textSecondary },
+  playRecent: { width: 36, height: 36, alignItems: 'center', justifyContent: 'center', borderRadius: 12, backgroundColor: 'rgba(56,189,248,0.1)' },
+  emptyState: { alignItems: 'center', justifyContent: 'center', paddingHorizontal: 28, paddingTop: 48, paddingBottom: 36 },
+  emptyIcon: { width: 61, height: 61, borderRadius: 21, alignItems: 'center', justifyContent: 'center', backgroundColor: 'rgba(14,165,233,0.1)', marginBottom: 13 },
+  emptyTitle: { color: THEME.colors.textPrimary, fontSize: 15, fontWeight: '800' },
+  emptyHint: { color: THEME.colors.textMuted, textAlign: 'center', fontSize: 11, lineHeight: 17, marginTop: 7 },
+  secondaryButton: { flexDirection: 'row', gap: 5, alignItems: 'center', paddingHorizontal: 13, paddingVertical: 10, borderRadius: 13, borderWidth: 1, borderColor: THEME.colors.borderSpecular, marginTop: 15 },
+  secondaryButtonText: { color: THEME.colors.accentCyan, fontSize: 11, fontWeight: '800' },
+  loading: { flexDirection: 'row', alignItems: 'center', justifyContent: 'center', gap: 8, padding: 20 },
+  loadingText: { color: THEME.colors.textSecondary, fontSize: 11 },
+  permissionArea: { flex: 1, justifyContent: 'center' },
+  errorToast: { flexDirection: 'row', alignItems: 'center', gap: 9, borderWidth: 1, borderColor: 'rgba(248,113,113,0.28)', backgroundColor: 'rgba(65,17,26,0.93)', borderRadius: 13, padding: 11, marginBottom: 4 },
+  errorText: { color: '#FECACA', flex: 1, fontSize: 10 },
+  modalBackdrop: { flex: 1, justifyContent: 'flex-end', backgroundColor: 'rgba(1,5,15,0.74)' },
+  settingsSheet: { backgroundColor: '#0A1730', borderTopLeftRadius: 26, borderTopRightRadius: 26, paddingHorizontal: 21, paddingTop: 11, paddingBottom: 30, borderWidth: 1, borderColor: 'rgba(56,189,248,0.22)' },
+  modalHandle: { width: 38, height: 4, borderRadius: 2, backgroundColor: 'rgba(148,163,184,0.45)', alignSelf: 'center', marginBottom: 16 },
+  modalHeader: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', marginBottom: 12 },
+  modalTitle: { color: THEME.colors.textPrimary, fontSize: 19, fontWeight: '800' },
+  settingsRow: { flexDirection: 'row', alignItems: 'center', gap: 13, paddingVertical: 15, borderBottomWidth: 1, borderBottomColor: 'rgba(148,163,184,0.09)' },
+  settingsCopy: { flex: 1, gap: 4 },
+  settingsTitle: { color: THEME.colors.textPrimary, fontSize: 12, fontWeight: '700' },
+  settingsMeta: { color: THEME.colors.textMuted, fontSize: 10 },
+  privacyNote: { color: THEME.colors.textMuted, fontSize: 10, lineHeight: 16, marginTop: 17 },
 });

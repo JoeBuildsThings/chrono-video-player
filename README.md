@@ -1,70 +1,49 @@
 # Chrono Player
 
-An Android video player that puts brightness, volume and seeking under your thumb.
+A blue-glass Android video player built around reliable playback controls, private on-device media browsing, and subtitles you can tune while watching.
 
-![Build](https://github.com/JoeBuildsThings/chrono-video-player/actions/workflows/build-apk.yml/badge.svg)
+[Download the latest APK](https://github.com/JoeBuildsThings/chrono-video-player/releases/latest) · [Report a bug](https://github.com/JoeBuildsThings/chrono-video-player/issues)
 
-Open videos from your phone or from a stream link, pick up exactly where you stopped, and load your own subtitles with timing you can adjust on the spot. No account, no ads, no tracking.
+## Playback
 
-**[Download the latest APK and start watching](https://github.com/JoeBuildsThings/chrono-video-player/releases/latest)**
+- Play and pause, accurate seeking, ten-second jumps, playback speed from 0.5x to 3x with pitch preservation, and volume/mute.
+- Swipe horizontally to seek. Swipe vertically on the left to adjust screen brightness and on the right to adjust player volume.
+- Double-tap the left/right side to jump back/forward ten seconds. Double-tap the centre to play or pause.
+- Pinch to zoom, choose fit/fill/stretch or common aspect ratios, lock touch controls, and use the in-app mini-player or Android picture-in-picture when supported.
+- Create an A-B loop to repeat a section and use a sleep timer to pause playback.
+- Resume supported videos from saved progress, use the queue's previous/next controls, and keep audio active in the background when enabled.
 
-## Control playback with your thumb
+## Your library
 
-* Swipe vertically to change brightness and volume, swipe horizontally to seek
-* Double tap the left or right side to jump 10 seconds, double tap the middle to play or pause
-* Pinch to zoom, and lock the screen so stray touches do nothing
+Browse device videos by folder or in one list. Search titles and folders, choose a sort order, refresh after adding files, or open a single video through Android's file picker. Play compatible HTTP/HTTPS media links, including HLS links where supported by the source and device. Unsupported links show a playback error rather than pretending they are supported.
 
-## Find a video and resume it fast
+## Subtitles
 
-* Your device videos are grouped into folders, with search and sorting
-* Chrono Player remembers where you stopped in each video
-* Paste any stream link to play it, and recent links are saved for next time
-
-## Subtitles and speed that fit the video
-
-* Load your own SRT or VTT file and shift the timing until the lines match the speech
-* Play from 0.5x to 3x with pitch correction
-* Set an A to B repeat to loop the part you are studying
+Import external SRT and VTT files from your device. Chrono parses cue timing and renders a synchronized overlay. Adjust subtitle timing in 250 ms steps, change text size, jump between cues, or select embedded subtitle tracks exposed by the video source.
 
 ## Privacy
 
-Chrono Player has no accounts, no ads and no analytics.
-
-Your watch history and settings stay on your device. When you open a stream link, your device connects to the host you chose to play it.
-
-## Install
-
-1. Open the [Releases page](https://github.com/JoeBuildsThings/chrono-video-player/releases/latest) and download the newest APK.
-2. When Android asks, allow installs from your browser or file manager.
-3. Open Chrono Player and grant access to your videos.
+No account, ads or analytics are required. The media library is scanned on device. Watch history and recent stream links are stored locally. Opening a network link connects your device to the host in that link.
 
 ## Build from source
 
-You need Node 22.13 or newer, JDK 17 and the Android SDK.
+You need Node.js 22.13 or newer, JDK 17 and the Android SDK.
 
-```bash
-git clone https://github.com/JoeBuildsThings/chrono-video-player.git
-cd chrono-video-player
-npm install --legacy-peer-deps
-npx expo prebuild --platform android --clean
-cd android && ./gradlew assembleRelease
-```
+    git clone https://github.com/JoeBuildsThings/chrono-video-player.git
+    cd chrono-video-player
+    npm install --legacy-peer-deps
+    npx tsc --noEmit
+    npx expo prebuild --platform android --clean
+    cd android && ./gradlew assembleRelease
 
-Every push to `main` also runs the same build on GitHub Actions and publishes the APK to Releases.
+The GitHub Actions workflow type-checks, generates the native Android project, builds a release APK, and uploads it as an artifact. Pushes to the main branch also publish a GitHub Release APK.
 
-## Built with
+## Known limits
 
-Expo, React Native, Zustand, React Native Reanimated and React Native Gesture Handler.
-
-## Work in progress
-
-* The equalizer and decoder mode controls exist in the interface, and the audio and decoder processing behind them is not connected yet
-* Android is the supported platform for now
+- Android is the primary supported platform.
+- Decoder-mode switching and audio equalizer processing are not exposed as controls because the current Expo playback engine does not implement those processing paths.
+- Supported stream formats depend on Android's playback backend, server response and network access.
 
 ## License
 
-Released under the [MIT License](LICENSE).
-
-## Author
-
-Built by Joe. More projects at [github.com/JoeBuildsThings](https://github.com/JoeBuildsThings).
+MIT. See LICENSE.
