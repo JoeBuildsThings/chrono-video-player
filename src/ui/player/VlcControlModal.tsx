@@ -1,6 +1,7 @@
 import React, { useState } from 'react';
 import {
-  Linking,
+  ActivityIndicator,
+  Alert,
   Modal,
   ScrollView,
   StyleSheet,
@@ -13,411 +14,207 @@ import * as DocumentPicker from 'expo-document-picker';
 import { usePlayerStore } from '../../store/usePlayerStore';
 import { SubtitleService } from '../../services/subtitle.service';
 import { GlassPanel } from '../common/GlassPanel';
-import { EQ_FREQUENCIES, EQ_PRESETS, THEME } from '../../core/constants/theme';
+import { THEME } from '../../core/constants/theme';
+import { formatDurationMs } from '../../engine/gesture.math';
+
+export interface NativeSubtitleOption {
+  id: string;
+  label: string;
+}
 
 interface VlcControlModalProps {
   visible: boolean;
   onClose: () => void;
+  nativeSubtitleTracks: NativeSubtitleOption[];
+  selectedNativeSubtitleId: string | null;
+  onSelectNativeSubtitle: (id: string | null) => void;
 }
 
-const SPEED_PRESETS = [0.5, 0.75, 1.0, 1.25, 1.5, 2.0, 3.0];
-const SLEEP_OPTIONS = [null, 15, 30, 45, 60];
-const GITHUB_PROFILE_URL = 'https://github.com/JoeBuildsThings';
-const GITHUB_REPO_URL = 'https://github.com/JoeBuildsThings/chrono-video-player';
+const SPEED_PRESETS = [0.5, 0.75, 1, 1.25, 1.5, 1.75, 2, 2.5, 3];
+const SLEEP_OPTIONS: Array<number | null> = [null, 15, 30, 45, 60];
 
-export const VlcControlModal: React.FC<VlcControlModalProps> = ({ visible, onClose }) => {
-  const [activeTab, setActiveTab] = useState<'audio' | 'subtitles' | 'tools'>('audio');
+export const VlcControlModal: React.FC<VlcControlModalProps> = ({
+  visible,
+  onClose,
+  nativeSubtitleTracks,
+  selectedNativeSubtitleId,
+  onSelectNativeSubtitle,
+}) => {
+  const [activeTab, setActiveTab] = useState<'subtitles' | 'playback' | 'more'>('subtitles');
+  const [isImporting, setIsImporting] = useState(false);
+  const playbackSpeed = usePlayerStore((s) => s.playbackSpeed);
+  const subtitleTracks = usePlayerStore((s) => s.subtitleTracks);
+  const activeSubtitleId = usePlayerStore((s) => s.activeSubtitleId);
+  const subtitleOffsetMs = usePlayerStore((s) => s.subtitleOffsetMs);
+  const subtitleFontSize = usePlayerStore((s) => s.subtitleFontSize);
+  const sleepTimerRemainingSec = usePlayerStore((s) => s.sleepTimerRemainingSec);
+  const isBackgroundAudioEnabled = usePlayerStore((s) => s.isBackgroundAudioEnabled);
+  const setPlaybackSpeed = usePlayerStore((s) => s.setPlaybackSpeed);
+  const addSubtitleTrack = usePlayerStore((s) => s.addSubtitleTrack);
+  const selectSubtitleTrack = usePlayerStore((s) => s.selectSubtitleTrack);
+  const adjustSubtitleOffset = usePlayerStore((s) => s.adjustSubtitleOffset);
+  const setSubtitleFontSize = usePlayerStore((s) => s.setSubtitleFontSize);
+  const setSleepTimer = usePlayerStore((s) => s.setSleepTimer);
+  const toggleBackgroundAudio = usePlayerStore((s) => s.toggleBackgroundAudio);
 
-  const {
-    playbackSpeed,
-    volumeBoost,
-    subtitleTracks,
-    activeSubtitleId,
-    subtitleOffsetMs,
-    subtitleFontSize,
-    audioOffsetMs,
-    activeEqPresetId,
-    eqBands,
-    sleepTimerRemainingSec,
-    isBackgroundAudioEnabled,
-    setPlaybackSpeed,
-    setVolumeBoost,
-    addSubtitleTrack,
-    selectSubtitleTrack,
-    adjustSubtitleOffset,
-    setSubtitleFontSize,
-    adjustAudioOffset,
-    setEqPreset,
-    setEqBandGain,
-    setSleepTimer,
-    toggleBackgroundAudio,
-  } = usePlayerStore();
-
-  const handleLoadExternalSubtitle = async () => {
+  const importSubtitle = async () => {
+    if (isImporting) return;
+    setIsImporting(true);
     try {
-      const res = await DocumentPicker.getDocumentAsync({
+      const result = await DocumentPicker.getDocumentAsync({
         type: ['*/*'],
         copyToCacheDirectory: true,
+        multiple: false,
       });
-      if (res.canceled || !res.assets?.length) return;
-      const asset = res.assets[0];
+      if (result.canceled || !result.assets?.[0]) return;
+      const asset = result.assets[0];
       const track = await SubtitleService.loadSubtitleFromUri(asset.uri, asset.name);
+      onSelectNativeSubtitle(null);
       addSubtitleTrack(track);
-    } catch {
-      return;
+    } catch (error) {
+      Alert.alert('Subtitle could not be loaded', error instanceof Error ? error.message : 'Select a valid SRT or VTT file and try again.');
+    } finally {
+      setIsImporting(false);
     }
   };
 
-  const handleInjectDemoSubtitle = () => {
-    const sampleSrt = `1
-00:00:01,000 --> 00:00:06,000
-[Chrono Subtitle Engine Active • Binary Search Sync]
-
-2
-00:00:06,500 --> 00:00:14,000
-Swipe horizontally on subtitle text to jump between cues.
-
-3
-00:00:14,500 --> 00:00:25,000
-Use the VLC Subtitle Lab to adjust sync offset in 50ms steps.`;
-    const track = SubtitleService.parseSubtitleContent(sampleSrt, 'Chrono_Demo_Track.srt');
-    addSubtitleTrack(track);
+  const selectExternal = (id: string | null) => {
+    onSelectNativeSubtitle(null);
+    selectSubtitleTrack(id);
   };
 
+  const selectNative = (id: string | null) => {
+    selectSubtitleTrack(null);
+    onSelectNativeSubtitle(id);
+  };
+
+  const sleepLabel = sleepTimerRemainingSec === null
+    ? 'Off'
+    : formatDurationMs(sleepTimerRemainingSec * 1000);
+
   return (
-    <Modal visible={visible} transparent animationType="fade" onRequestClose={onClose}>
+    <Modal visible={visible} transparent animationType="fade" onRequestClose={onClose} statusBarTranslucent>
       <View style={styles.backdrop}>
         <GlassPanel style={styles.sheet} intensity={55} heavy activeBorder>
+          <View style={styles.handle} />
           <View style={styles.header}>
-            <View style={styles.headerTitleRow}>
-              <Ionicons name="options-outline" size={20} color={THEME.colors.accentCyan} />
-              <Text style={styles.headerTitle}>VLC / MX ENGINE SETTINGS</Text>
+            <View>
+              <Text style={styles.eyebrow}>CHRONO CONTROLS</Text>
+              <Text style={styles.title}>Playback lab</Text>
             </View>
-            <TouchableOpacity onPress={onClose} style={styles.closeBtn}>
+            <TouchableOpacity accessibilityLabel="Close playback settings" onPress={onClose} style={styles.closeButton}>
               <Ionicons name="close" size={20} color={THEME.colors.textPrimary} />
             </TouchableOpacity>
           </View>
 
-          <View style={styles.tabRow}>
-            <TouchableOpacity
-              style={[styles.tabPill, activeTab === 'audio' && styles.tabPillActive]}
-              onPress={() => setActiveTab('audio')}
-            >
-              <Text style={[styles.tabText, activeTab === 'audio' && styles.tabTextActive]}>
-                Audio & 200% EQ
-              </Text>
-            </TouchableOpacity>
-
-            <TouchableOpacity
-              style={[styles.tabPill, activeTab === 'subtitles' && styles.tabPillActive]}
-              onPress={() => setActiveTab('subtitles')}
-            >
-              <Text style={[styles.tabText, activeTab === 'subtitles' && styles.tabTextActive]}>
-                Subtitles ({subtitleTracks.length})
-              </Text>
-            </TouchableOpacity>
-
-            <TouchableOpacity
-              style={[styles.tabPill, activeTab === 'tools' && styles.tabPillActive]}
-              onPress={() => setActiveTab('tools')}
-            >
-              <Text style={[styles.tabText, activeTab === 'tools' && styles.tabTextActive]}>
-                Speed & Info
-              </Text>
-            </TouchableOpacity>
+          <View style={styles.tabs}>
+            {([
+              { id: 'subtitles', label: 'Subtitles', icon: 'chatbox-ellipses-outline' },
+              { id: 'playback', label: 'Speed', icon: 'speedometer-outline' },
+              { id: 'more', label: 'Timer', icon: 'moon-outline' },
+            ] as const).map((tab) => (
+              <TouchableOpacity key={tab.id} onPress={() => setActiveTab(tab.id)} style={[styles.tab, activeTab === tab.id && styles.tabActive]}>
+                <Ionicons name={tab.icon as any} size={15} color={activeTab === tab.id ? THEME.colors.accentCyan : THEME.colors.textMuted} />
+                <Text style={[styles.tabText, activeTab === tab.id && styles.tabTextActive]}>{tab.label}</Text>
+              </TouchableOpacity>
+            ))}
           </View>
 
-          <ScrollView style={styles.body} showsVerticalScrollIndicator={false}>
-            {activeTab === 'audio' && (
-              <View style={styles.section}>
-                <Text style={styles.label}>
-                  VLC SOFTWARE PRE-AMP BOOST: {Math.round(volumeBoost * 100)}%
-                </Text>
-                <View style={styles.boostRow}>
-                  {[0.5, 1.0, 1.25, 1.5, 2.0].map((val) => (
-                    <TouchableOpacity
-                      key={val}
-                      style={[
-                        styles.chip,
-                        Math.abs(volumeBoost - val) < 0.05 && styles.chipActive,
-                        val > 1.0 && styles.chipBoostWarning,
-                      ]}
-                      onPress={() => setVolumeBoost(val)}
-                    >
-                      <Text style={styles.chipText}>{Math.round(val * 100)}%</Text>
-                    </TouchableOpacity>
-                  ))}
-                </View>
-
-                <Text style={styles.label}>EQUALIZER PRESETS</Text>
-                <ScrollView horizontal showsHorizontalScrollIndicator={false}>
-                  <View style={styles.presetRow}>
-                    {EQ_PRESETS.map((preset) => (
-                      <TouchableOpacity
-                        key={preset.id}
-                        style={[
-                          styles.chip,
-                          activeEqPresetId === preset.id && styles.chipActive,
-                        ]}
-                        onPress={() => setEqPreset(preset.id, [...preset.bands])}
-                      >
-                        <Text style={styles.chipText}>{preset.name}</Text>
-                      </TouchableOpacity>
-                    ))}
-                  </View>
-                </ScrollView>
-
-                <View style={styles.eqBandsContainer}>
-                  {EQ_FREQUENCIES.map((freq, idx) => (
-                    <View key={freq} style={styles.eqColumn}>
-                      <TouchableOpacity
-                        style={styles.eqStepBtn}
-                        onPress={() => setEqBandGain(idx, eqBands[idx] + 2)}
-                      >
-                        <Ionicons name="add" size={14} color={THEME.colors.accentCyan} />
-                      </TouchableOpacity>
-                      <Text style={styles.eqValue}>
-                        {eqBands[idx] > 0 ? `+${eqBands[idx]}` : eqBands[idx]}dB
-                      </Text>
-                      <TouchableOpacity
-                        style={styles.eqStepBtn}
-                        onPress={() => setEqBandGain(idx, eqBands[idx] - 2)}
-                      >
-                        <Ionicons name="remove" size={14} color={THEME.colors.textSecondary} />
-                      </TouchableOpacity>
-                      <Text style={styles.eqFreq}>{freq}</Text>
-                    </View>
-                  ))}
-                </View>
-
-                <Text style={styles.label}>
-                  AUDIO TRACK SYNC OFFSET: {audioOffsetMs >= 0 ? `+${audioOffsetMs}` : audioOffsetMs} ms
-                </Text>
-                <View style={styles.stepperRow}>
-                  <TouchableOpacity
-                    style={styles.stepButton}
-                    onPress={() => adjustAudioOffset(-50)}
-                  >
-                    <Text style={styles.stepBtnText}>-50 ms</Text>
-                  </TouchableOpacity>
-                  <TouchableOpacity
-                    style={styles.stepButton}
-                    onPress={() => adjustAudioOffset(-audioOffsetMs)}
-                  >
-                    <Text style={styles.stepBtnText}>Reset (0 ms)</Text>
-                  </TouchableOpacity>
-                  <TouchableOpacity
-                    style={styles.stepButton}
-                    onPress={() => adjustAudioOffset(50)}
-                  >
-                    <Text style={styles.stepBtnText}>+50 ms</Text>
-                  </TouchableOpacity>
-                </View>
-              </View>
-            )}
-
+          <ScrollView style={styles.content} contentContainerStyle={styles.contentInner} showsVerticalScrollIndicator={false}>
             {activeTab === 'subtitles' && (
-              <View style={styles.section}>
-                <View style={styles.subActionRow}>
-                  <TouchableOpacity
-                    style={styles.primaryActionBtn}
-                    onPress={handleLoadExternalSubtitle}
-                  >
-                    <Ionicons name="document-text-outline" size={16} color={THEME.colors.textPrimary} />
-                    <Text style={styles.primaryActionText}>Load .SRT / .VTT File</Text>
-                  </TouchableOpacity>
-
-                  <TouchableOpacity
-                    style={styles.secondaryActionBtn}
-                    onPress={handleInjectDemoSubtitle}
-                  >
-                    <Text style={styles.secondaryActionText}>Load Test Track</Text>
-                  </TouchableOpacity>
-                </View>
-
-                <Text style={styles.label}>ACTIVE SUBTITLE TRACK</Text>
-                <View style={styles.boostRow}>
-                  <TouchableOpacity
-                    style={[styles.chip, activeSubtitleId === null && styles.chipActive]}
-                    onPress={() => selectSubtitleTrack(null)}
-                  >
-                    <Text style={styles.chipText}>Disabled</Text>
-                  </TouchableOpacity>
-                  {subtitleTracks.map((t) => (
-                    <TouchableOpacity
-                      key={t.id}
-                      style={[styles.chip, activeSubtitleId === t.id && styles.chipActive]}
-                      onPress={() => selectSubtitleTrack(t.id)}
-                    >
-                      <Text style={styles.chipText}>
-                        {t.name} ({t.cues.length} cues)
-                      </Text>
-                    </TouchableOpacity>
-                  ))}
-                </View>
-
-                <Text style={styles.label}>
-                  SUBTITLE SYNC DELAY: {subtitleOffsetMs >= 0 ? `+${subtitleOffsetMs}` : subtitleOffsetMs} ms
-                </Text>
-                <View style={styles.stepperRow}>
-                  <TouchableOpacity
-                    style={styles.stepButton}
-                    onPress={() => adjustSubtitleOffset(-50)}
-                  >
-                    <Text style={styles.stepBtnText}>-50 ms (Earlier)</Text>
-                  </TouchableOpacity>
-                  <TouchableOpacity
-                    style={styles.stepButton}
-                    onPress={() => adjustSubtitleOffset(-subtitleOffsetMs)}
-                  >
-                    <Text style={styles.stepBtnText}>0 ms</Text>
-                  </TouchableOpacity>
-                  <TouchableOpacity
-                    style={styles.stepButton}
-                    onPress={() => adjustSubtitleOffset(50)}
-                  >
-                    <Text style={styles.stepBtnText}>+50 ms (Later)</Text>
-                  </TouchableOpacity>
-                </View>
-
-                <Text style={styles.label}>SUBTITLE FONT SCALE: {subtitleFontSize}px</Text>
-                <View style={styles.stepperRow}>
-                  <TouchableOpacity
-                    style={styles.stepButton}
-                    onPress={() => setSubtitleFontSize(subtitleFontSize - 2)}
-                  >
-                    <Text style={styles.stepBtnText}>A-</Text>
-                  </TouchableOpacity>
-                  <TouchableOpacity
-                    style={styles.stepButton}
-                    onPress={() => setSubtitleFontSize(18)}
-                  >
-                    <Text style={styles.stepBtnText}>Default (18px)</Text>
-                  </TouchableOpacity>
-                  <TouchableOpacity
-                    style={styles.stepButton}
-                    onPress={() => setSubtitleFontSize(subtitleFontSize + 2)}
-                  >
-                    <Text style={styles.stepBtnText}>A+</Text>
-                  </TouchableOpacity>
-                </View>
-              </View>
-            )}
-
-            {activeTab === 'tools' && (
-              <View style={styles.section}>
-                <Text style={styles.label}>FINE PLAYBACK SPEED: {playbackSpeed.toFixed(2)}x</Text>
-                <View style={styles.stepperRow}>
-                  <TouchableOpacity
-                    style={styles.stepButton}
-                    onPress={() => setPlaybackSpeed(playbackSpeed - 0.05)}
-                  >
-                    <Text style={styles.stepBtnText}>-0.05x</Text>
-                  </TouchableOpacity>
-                  <TouchableOpacity
-                    style={styles.stepButton}
-                    onPress={() => setPlaybackSpeed(1.0)}
-                  >
-                    <Text style={styles.stepBtnText}>Reset 1.00x</Text>
-                  </TouchableOpacity>
-                  <TouchableOpacity
-                    style={styles.stepButton}
-                    onPress={() => setPlaybackSpeed(playbackSpeed + 0.05)}
-                  >
-                    <Text style={styles.stepBtnText}>+0.05x</Text>
-                  </TouchableOpacity>
-                </View>
-
-                <View style={styles.boostRow}>
-                  {SPEED_PRESETS.map((spd) => (
-                    <TouchableOpacity
-                      key={spd}
-                      style={[
-                        styles.chip,
-                        Math.abs(playbackSpeed - spd) < 0.02 && styles.chipActive,
-                      ]}
-                      onPress={() => setPlaybackSpeed(spd)}
-                    >
-                      <Text style={styles.chipText}>{spd}x</Text>
-                    </TouchableOpacity>
-                  ))}
-                </View>
-
-                <Text style={styles.label}>
-                  SLEEP TIMER:{' '}
-                  {sleepTimerRemainingSec
-                    ? `${Math.ceil(sleepTimerRemainingSec / 60)} min remaining`
-                    : 'OFF'}
-                </Text>
-                <View style={styles.boostRow}>
-                  {SLEEP_OPTIONS.map((mins) => (
-                    <TouchableOpacity
-                      key={String(mins)}
-                      style={[
-                        styles.chip,
-                        (mins === null && sleepTimerRemainingSec === null) ||
-                        (mins !== null &&
-                          sleepTimerRemainingSec !== null &&
-                          Math.ceil(sleepTimerRemainingSec / 60) === mins)
-                          ? styles.chipActive
-                          : null,
-                      ]}
-                      onPress={() => setSleepTimer(mins)}
-                    >
-                      <Text style={styles.chipText}>{mins === null ? 'Off' : `${mins}m`}</Text>
-                    </TouchableOpacity>
-                  ))}
-                </View>
-
-                <TouchableOpacity
-                  style={[
-                    styles.toggleCard,
-                    isBackgroundAudioEnabled && styles.toggleCardActive,
-                  ]}
-                  onPress={toggleBackgroundAudio}
-                >
-                  <Ionicons
-                    name="headset-outline"
-                    size={20}
-                    color={THEME.colors.accentCyan}
-                  />
-                  <View style={{ flex: 1 }}>
-                    <Text style={styles.toggleTitle}>VLC Background Audio Mode</Text>
-                    <Text style={styles.toggleSub}>
-                      Continue audio playback when screen is minimized or turned off
-                    </Text>
-                  </View>
-                  <Text style={styles.toggleBadge}>
-                    {isBackgroundAudioEnabled ? 'ON' : 'OFF'}
-                  </Text>
+              <>
+                <TouchableOpacity style={styles.importButton} onPress={importSubtitle} disabled={isImporting}>
+                  {isImporting ? <ActivityIndicator size="small" color="#FFFFFF" /> : <Ionicons name="document-text-outline" size={18} color="#FFFFFF" />}
+                  <Text style={styles.importText}>{isImporting ? 'Loading subtitle…' : 'Import .SRT or .VTT file'}</Text>
+                  {!isImporting && <Ionicons name="add" size={19} color="#FFFFFF" />}
                 </TouchableOpacity>
-              </View>
+                <Text style={styles.sectionLabel}>ON-VIDEO SUBTITLES</Text>
+                <TouchableOpacity onPress={() => { selectExternal(null); selectNative(null); }} style={styles.trackRow}>
+                  <View style={styles.trackCopy}><Text style={styles.trackName}>Subtitles off</Text><Text style={styles.trackMeta}>Hide all subtitle tracks</Text></View>
+                  {!activeSubtitleId && !selectedNativeSubtitleId && <Ionicons name="checkmark-circle" size={19} color={THEME.colors.accentCyan} />}
+                </TouchableOpacity>
+
+                {nativeSubtitleTracks.map((track) => (
+                  <TouchableOpacity key={'native_' + track.id} onPress={() => selectNative(track.id)} style={styles.trackRow}>
+                    <View style={styles.trackCopy}><Text numberOfLines={1} style={styles.trackName}>{track.label || 'Embedded subtitle'}</Text><Text style={styles.trackMeta}>Embedded in video</Text></View>
+                    {selectedNativeSubtitleId === track.id && <Ionicons name="checkmark-circle" size={19} color={THEME.colors.accentCyan} />}
+                  </TouchableOpacity>
+                ))}
+                {subtitleTracks.map((track) => (
+                  <TouchableOpacity key={track.id} onPress={() => selectExternal(track.id)} style={styles.trackRow}>
+                    <View style={styles.trackCopy}><Text numberOfLines={1} style={styles.trackName}>{track.name}</Text><Text style={styles.trackMeta}>{track.format.toUpperCase()} · {track.cues.length} cues</Text></View>
+                    {activeSubtitleId === track.id && <Ionicons name="checkmark-circle" size={19} color={THEME.colors.accentCyan} />}
+                  </TouchableOpacity>
+                ))}
+                {nativeSubtitleTracks.length === 0 && subtitleTracks.length === 0 && (
+                  <Text style={styles.emptyText}>No subtitles loaded. Import an SRT or VTT file from your device.</Text>
+                )}
+
+                <View style={styles.divider} />
+                <View style={styles.settingRow}>
+                  <View style={styles.trackCopy}><Text style={styles.trackName}>Subtitle timing</Text><Text style={styles.trackMeta}>{subtitleOffsetMs > 0 ? '+' : ''}{(subtitleOffsetMs / 1000).toFixed(2)} seconds</Text></View>
+                  <View style={styles.stepper}>
+                    <TouchableOpacity accessibilityLabel="Show subtitles earlier" style={styles.stepButton} onPress={() => adjustSubtitleOffset(-250)}><Ionicons name="play-back" size={15} color={THEME.colors.accentCyan} /></TouchableOpacity>
+                    <TouchableOpacity accessibilityLabel="Show subtitles later" style={styles.stepButton} onPress={() => adjustSubtitleOffset(250)}><Ionicons name="play-forward" size={15} color={THEME.colors.accentCyan} /></TouchableOpacity>
+                  </View>
+                </View>
+                <View style={styles.settingRow}>
+                  <View style={styles.trackCopy}><Text style={styles.trackName}>Subtitle size</Text><Text style={styles.trackMeta}>{subtitleFontSize} px</Text></View>
+                  <View style={styles.stepper}>
+                    <TouchableOpacity accessibilityLabel="Decrease subtitle size" style={styles.stepButton} onPress={() => setSubtitleFontSize(subtitleFontSize - 2)}><Ionicons name="remove" size={17} color={THEME.colors.accentCyan} /></TouchableOpacity>
+                    <TouchableOpacity accessibilityLabel="Increase subtitle size" style={styles.stepButton} onPress={() => setSubtitleFontSize(subtitleFontSize + 2)}><Ionicons name="add" size={17} color={THEME.colors.accentCyan} /></TouchableOpacity>
+                  </View>
+                </View>
+              </>
             )}
 
-            <View style={styles.githubFooterDivider} />
-
-            <View style={styles.githubFooterRow}>
-              <TouchableOpacity
-                style={styles.githubButton}
-                activeOpacity={0.85}
-                onPress={() => Linking.openURL(GITHUB_PROFILE_URL)}
-              >
-                <Ionicons name="logo-github" size={20} color={THEME.colors.textPrimary} />
-                <View style={{ flex: 1 }}>
-                  <Text style={styles.githubBtnTitle}>GitHub • @JoeBuildsThings</Text>
-                  <Text style={styles.githubBtnSub}>Engineered by Master Joe</Text>
+            {activeTab === 'playback' && (
+              <>
+                <Text style={styles.sectionLabel}>PLAYBACK SPEED</Text>
+                <Text style={styles.speedCurrent}>{playbackSpeed.toFixed(playbackSpeed % 1 === 0 ? 1 : 2)}<Text style={styles.speedX}>x</Text></Text>
+                <Text style={styles.speedDescription}>Audio pitch is preserved where the platform supports it.</Text>
+                <View style={styles.speedGrid}>
+                  {SPEED_PRESETS.map((speed) => (
+                    <TouchableOpacity key={speed} onPress={() => setPlaybackSpeed(speed)} style={[styles.speedOption, playbackSpeed === speed && styles.speedOptionActive]}>
+                      <Text style={[styles.speedText, playbackSpeed === speed && styles.speedTextActive]}>{speed}x</Text>
+                    </TouchableOpacity>
+                  ))}
                 </View>
-                <Ionicons name="open-outline" size={16} color={THEME.colors.accentCyan} />
-              </TouchableOpacity>
+              </>
+            )}
 
-              <TouchableOpacity
-                style={styles.githubRepoIconBtn}
-                activeOpacity={0.85}
-                onPress={() => Linking.openURL(GITHUB_REPO_URL)}
-              >
-                <Ionicons name="code-slash-outline" size={18} color={THEME.colors.accentCyan} />
-              </TouchableOpacity>
-            </View>
+            {activeTab === 'more' && (
+              <>
+                <Text style={styles.sectionLabel}>SLEEP TIMER</Text>
+                <View style={styles.timerPills}>
+                  {SLEEP_OPTIONS.map((minutes) => {
+                    const active = minutes === null
+                      ? sleepTimerRemainingSec === null
+                      : sleepTimerRemainingSec !== null && Math.ceil(sleepTimerRemainingSec / 60) === minutes;
+                    return (
+                      <TouchableOpacity key={minutes === null ? 'off' : String(minutes)} onPress={() => setSleepTimer(minutes)} style={[styles.timerPill, active && styles.timerPillActive]}>
+                        <Text style={[styles.timerText, active && styles.timerTextActive]}>{minutes === null ? 'Off' : minutes + ' min'}</Text>
+                      </TouchableOpacity>
+                    );
+                  })}
+                </View>
+                <View style={styles.settingRow}>
+                  <View style={styles.trackCopy}>
+                    <Text style={styles.trackName}>Background audio</Text>
+                    <Text style={styles.trackMeta}>Keep audio playing when Chrono is backgrounded</Text>
+                  </View>
+                  <TouchableOpacity
+                    accessibilityLabel="Toggle background audio"
+                    accessibilityState={{ checked: isBackgroundAudioEnabled }}
+                    onPress={toggleBackgroundAudio}
+                    style={[styles.switch, isBackgroundAudioEnabled && styles.switchOn]}
+                  >
+                    <View style={[styles.switchKnob, isBackgroundAudioEnabled && styles.switchKnobOn]} />
+                  </TouchableOpacity>
+                </View>
+                <Text style={styles.notice}>Background playback depends on Android's media and battery settings. Video playback is not guaranteed to remain visible outside the app.</Text>
+              </>
+            )}
           </ScrollView>
         </GlassPanel>
       </View>
@@ -426,268 +223,48 @@ Use the VLC Subtitle Lab to adjust sync offset in 50ms steps.`;
 };
 
 const styles = StyleSheet.create({
-  backdrop: {
-    flex: 1,
-    backgroundColor: 'rgba(2, 6, 16, 0.72)',
-    justifyContent: 'center',
-    alignItems: 'center',
-    padding: THEME.spacing.lg,
-  },
-  sheet: {
-    width: '100%',
-    maxWidth: 520,
-    maxHeight: '90%',
-    padding: THEME.spacing.lg,
-  },
-  header: {
-    flexDirection: 'row',
-    justifyContent: 'space-between',
-    alignItems: 'center',
-    marginBottom: THEME.spacing.md,
-  },
-  headerTitleRow: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    gap: 8,
-  },
-  headerTitle: {
-    color: THEME.colors.textPrimary,
-    fontSize: 15,
-    fontWeight: '800',
-    letterSpacing: 0.8,
-  },
-  closeBtn: {
-    width: 32,
-    height: 32,
-    borderRadius: 16,
-    backgroundColor: THEME.colors.glassSurfaceLight,
-    justifyContent: 'center',
-    alignItems: 'center',
-  },
-  tabRow: {
-    flexDirection: 'row',
-    gap: 8,
-    marginBottom: THEME.spacing.md,
-  },
-  tabPill: {
-    flex: 1,
-    paddingVertical: 8,
-    borderRadius: THEME.radius.md,
-    backgroundColor: 'rgba(4, 8, 18, 0.6)',
-    borderWidth: 1,
-    borderColor: THEME.colors.borderSubtle,
-    alignItems: 'center',
-  },
-  tabPillActive: {
-    backgroundColor: THEME.colors.glassSurfaceLight,
-    borderColor: THEME.colors.accentElectric,
-  },
-  tabText: {
-    fontSize: 12,
-    color: THEME.colors.textSecondary,
-    fontWeight: '600',
-  },
-  tabTextActive: {
-    color: THEME.colors.textPrimary,
-    fontWeight: '700',
-  },
-  body: {
-    maxHeight: 410,
-  },
-  section: {
-    gap: THEME.spacing.sm,
-    paddingBottom: THEME.spacing.sm,
-  },
-  label: {
-    fontSize: 11,
-    fontWeight: '800',
-    color: THEME.colors.accentCyan,
-    letterSpacing: 0.7,
-    marginTop: 6,
-  },
-  boostRow: {
-    flexDirection: 'row',
-    flexWrap: 'wrap',
-    gap: 8,
-  },
-  presetRow: {
-    flexDirection: 'row',
-    gap: 8,
-    paddingVertical: 2,
-  },
-  chip: {
-    paddingHorizontal: 12,
-    paddingVertical: 8,
-    borderRadius: THEME.radius.md,
-    backgroundColor: 'rgba(4, 8, 18, 0.65)',
-    borderWidth: 1,
-    borderColor: THEME.colors.borderSpecular,
-  },
-  chipActive: {
-    backgroundColor: THEME.colors.accentCobalt,
-    borderColor: THEME.colors.accentCyan,
-  },
-  chipBoostWarning: {
-    borderColor: THEME.colors.statusWarning,
-  },
-  chipText: {
-    color: THEME.colors.textPrimary,
-    fontSize: 12,
-    fontWeight: '700',
-  },
-  eqBandsContainer: {
-    flexDirection: 'row',
-    justifyContent: 'space-between',
-    backgroundColor: 'rgba(4, 8, 18, 0.65)',
-    padding: THEME.spacing.md,
-    borderRadius: THEME.radius.md,
-    borderWidth: 1,
-    borderColor: THEME.colors.borderSubtle,
-  },
-  eqColumn: {
-    alignItems: 'center',
-    gap: 6,
-  },
-  eqStepBtn: {
-    width: 30,
-    height: 26,
-    borderRadius: 6,
-    backgroundColor: THEME.colors.glassSurfaceLight,
-    justifyContent: 'center',
-    alignItems: 'center',
-  },
-  eqValue: {
-    color: THEME.colors.textPrimary,
-    fontSize: 11,
-    fontFamily: THEME.typography.monoFamily,
-    fontWeight: '700',
-  },
-  eqFreq: {
-    color: THEME.colors.textMuted,
-    fontSize: 10,
-  },
-  stepperRow: {
-    flexDirection: 'row',
-    gap: 8,
-  },
-  stepButton: {
-    flex: 1,
-    paddingVertical: 10,
-    borderRadius: THEME.radius.md,
-    backgroundColor: THEME.colors.glassSurfaceLight,
-    borderWidth: 1,
-    borderColor: THEME.colors.borderSpecular,
-    alignItems: 'center',
-  },
-  stepBtnText: {
-    color: THEME.colors.textPrimary,
-    fontSize: 12,
-    fontWeight: '700',
-    fontFamily: THEME.typography.monoFamily,
-  },
-  subActionRow: {
-    flexDirection: 'row',
-    gap: 8,
-  },
-  primaryActionBtn: {
-    flex: 1,
-    flexDirection: 'row',
-    alignItems: 'center',
-    justifyContent: 'center',
-    gap: 6,
-    backgroundColor: THEME.colors.accentCobalt,
-    paddingVertical: 11,
-    borderRadius: THEME.radius.md,
-    borderWidth: 1,
-    borderColor: THEME.colors.accentCyan,
-  },
-  primaryActionText: {
-    color: THEME.colors.textPrimary,
-    fontSize: 12,
-    fontWeight: '700',
-  },
-  secondaryActionBtn: {
-    paddingHorizontal: 14,
-    justifyContent: 'center',
-    borderRadius: THEME.radius.md,
-    backgroundColor: THEME.colors.glassSurfaceLight,
-    borderWidth: 1,
-    borderColor: THEME.colors.borderSpecular,
-  },
-  secondaryActionText: {
-    color: THEME.colors.accentCyan,
-    fontSize: 12,
-    fontWeight: '700',
-  },
-  toggleCard: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    gap: THEME.spacing.md,
-    padding: THEME.spacing.md,
-    borderRadius: THEME.radius.md,
-    backgroundColor: 'rgba(4, 8, 18, 0.65)',
-    borderWidth: 1,
-    borderColor: THEME.colors.borderSpecular,
-    marginTop: 6,
-  },
-  toggleCardActive: {
-    borderColor: THEME.colors.accentElectric,
-    backgroundColor: THEME.colors.glassSurfaceLight,
-  },
-  toggleTitle: {
-    color: THEME.colors.textPrimary,
-    fontSize: 13,
-    fontWeight: '700',
-  },
-  toggleSub: {
-    color: THEME.colors.textSecondary,
-    fontSize: 11,
-  },
-  toggleBadge: {
-    color: THEME.colors.accentCyan,
-    fontWeight: '800',
-    fontSize: 12,
-  },
-  githubFooterDivider: {
-    height: 1,
-    backgroundColor: THEME.colors.borderSubtle,
-    marginVertical: THEME.spacing.md,
-  },
-  githubFooterRow: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    gap: 8,
-    paddingBottom: 6,
-  },
-  githubButton: {
-    flex: 1,
-    flexDirection: 'row',
-    alignItems: 'center',
-    gap: 10,
-    paddingHorizontal: THEME.spacing.md,
-    paddingVertical: 10,
-    borderRadius: THEME.radius.md,
-    backgroundColor: 'rgba(4, 8, 18, 0.8)',
-    borderWidth: 1,
-    borderColor: THEME.colors.borderSpecular,
-  },
-  githubBtnTitle: {
-    color: THEME.colors.textPrimary,
-    fontSize: 13,
-    fontWeight: '700',
-  },
-  githubBtnSub: {
-    color: THEME.colors.accentCyan,
-    fontSize: 11,
-  },
-  githubRepoIconBtn: {
-    width: 42,
-    height: 42,
-    borderRadius: THEME.radius.md,
-    backgroundColor: THEME.colors.glassSurfaceLight,
-    borderWidth: 1,
-    borderColor: THEME.colors.borderSpecular,
-    justifyContent: 'center',
-    alignItems: 'center',
-  },
+  backdrop: { flex: 1, justifyContent: 'flex-end', backgroundColor: 'rgba(1,5,15,0.78)', paddingTop: 36 },
+  sheet: { maxHeight: '88%', minHeight: '55%', borderTopLeftRadius: 25, borderTopRightRadius: 25, borderBottomLeftRadius: 0, borderBottomRightRadius: 0, paddingHorizontal: 17, paddingTop: 10, paddingBottom: 24 },
+  handle: { width: 38, height: 4, borderRadius: 2, backgroundColor: 'rgba(148,163,184,0.45)', alignSelf: 'center', marginBottom: 15 },
+  header: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', marginBottom: 17 },
+  eyebrow: { color: THEME.colors.accentCyan, fontSize: 8, fontWeight: '800', letterSpacing: 1.8, marginBottom: 4 },
+  title: { color: THEME.colors.textPrimary, fontSize: 22, fontWeight: '800', letterSpacing: -0.6 },
+  closeButton: { width: 39, height: 39, borderRadius: 14, backgroundColor: 'rgba(255,255,255,0.06)', alignItems: 'center', justifyContent: 'center' },
+  tabs: { flexDirection: 'row', padding: 4, borderRadius: 14, backgroundColor: 'rgba(4,8,18,0.55)', marginBottom: 15 },
+  tab: { flex: 1, minHeight: 40, flexDirection: 'row', alignItems: 'center', justifyContent: 'center', gap: 6, borderRadius: 11 },
+  tabActive: { backgroundColor: 'rgba(37,99,235,0.2)', borderWidth: 1, borderColor: 'rgba(56,189,248,0.18)' },
+  tabText: { color: THEME.colors.textMuted, fontSize: 11, fontWeight: '700' },
+  tabTextActive: { color: THEME.colors.textPrimary },
+  content: { flex: 1 },
+  contentInner: { paddingBottom: 18 },
+  importButton: { minHeight: 47, borderRadius: 13, backgroundColor: '#1769DE', flexDirection: 'row', alignItems: 'center', justifyContent: 'center', gap: 9, marginBottom: 22 },
+  importText: { color: '#FFFFFF', fontSize: 12, fontWeight: '800' },
+  sectionLabel: { color: THEME.colors.textMuted, fontSize: 9, fontWeight: '800', letterSpacing: 1.5, marginBottom: 9, marginTop: 5 },
+  trackRow: { flexDirection: 'row', alignItems: 'center', gap: 12, minHeight: 51, paddingVertical: 8, borderBottomWidth: 1, borderBottomColor: 'rgba(148,163,184,0.08)' },
+  trackCopy: { flex: 1, gap: 4 },
+  trackName: { color: THEME.colors.textPrimary, fontSize: 12, fontWeight: '700' },
+  trackMeta: { color: THEME.colors.textMuted, fontSize: 10 },
+  emptyText: { color: THEME.colors.textMuted, fontSize: 11, lineHeight: 17, marginTop: 9, marginBottom: 15 },
+  divider: { height: 1, backgroundColor: 'rgba(148,163,184,0.12)', marginVertical: 12 },
+  settingRow: { flexDirection: 'row', alignItems: 'center', gap: 12, paddingVertical: 12 },
+  stepper: { flexDirection: 'row', gap: 7 },
+  stepButton: { width: 36, height: 36, borderRadius: 12, backgroundColor: 'rgba(14,165,233,0.1)', justifyContent: 'center', alignItems: 'center', borderWidth: 1, borderColor: 'rgba(56,189,248,0.15)' },
+  speedCurrent: { color: THEME.colors.textPrimary, fontSize: 46, textAlign: 'center', fontWeight: '800', marginTop: 15, letterSpacing: -1.4 },
+  speedX: { color: THEME.colors.accentCyan, fontSize: 26 },
+  speedDescription: { color: THEME.colors.textMuted, textAlign: 'center', fontSize: 10, marginTop: 2, marginBottom: 22 },
+  speedGrid: { flexDirection: 'row', flexWrap: 'wrap', gap: 8 },
+  speedOption: { width: '31%', flexGrow: 1, minHeight: 45, justifyContent: 'center', alignItems: 'center', backgroundColor: 'rgba(4,8,18,0.5)', borderWidth: 1, borderColor: 'rgba(148,163,184,0.1)', borderRadius: 12 },
+  speedOptionActive: { borderColor: THEME.colors.accentCyan, backgroundColor: 'rgba(37,99,235,0.22)' },
+  speedText: { color: THEME.colors.textSecondary, fontSize: 12, fontWeight: '700' },
+  speedTextActive: { color: THEME.colors.textPrimary },
+  timerPills: { flexDirection: 'row', flexWrap: 'wrap', gap: 8, marginTop: 8, marginBottom: 15 },
+  timerPill: { paddingVertical: 11, paddingHorizontal: 15, borderRadius: 12, backgroundColor: 'rgba(4,8,18,0.55)', borderWidth: 1, borderColor: 'rgba(148,163,184,0.1)' },
+  timerPillActive: { backgroundColor: 'rgba(37,99,235,0.22)', borderColor: THEME.colors.accentCyan },
+  timerText: { color: THEME.colors.textSecondary, fontSize: 11, fontWeight: '700' },
+  timerTextActive: { color: THEME.colors.textPrimary },
+  switch: { width: 47, height: 27, padding: 3, borderRadius: 15, backgroundColor: 'rgba(148,163,184,0.18)', justifyContent: 'center' },
+  switchOn: { backgroundColor: '#1769DE' },
+  switchKnob: { width: 21, height: 21, borderRadius: 11, backgroundColor: '#D5E1F0' },
+  switchKnobOn: { alignSelf: 'flex-end', backgroundColor: '#FFFFFF' },
+  notice: { fontSize: 10, color: THEME.colors.textMuted, lineHeight: 16, marginTop: 15, marginBottom: 7 },
 });

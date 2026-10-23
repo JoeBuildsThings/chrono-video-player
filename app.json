@@ -46,7 +46,14 @@
           "isAccessMediaLocationEnabled": true
         }
       ],
-      "expo-screen-orientation"
+      "expo-screen-orientation",
+      [
+        "expo-video",
+        {
+          "supportsBackgroundPlayback": true,
+          "supportsPictureInPicture": true
+        }
+      ]
     ]
   }
 }

@@ -34,17 +34,11 @@ interface PlayerState {
   eqBands: number[];
   sleepTimerRemainingSec: number | null;
   isBackgroundAudioEnabled: boolean;
-
   openVideo: (video: VideoItem, queue?: VideoItem[], resumeMs?: number) => void;
   minimizePlayer: () => void;
   expandPlayer: () => void;
   closePlayer: () => void;
-  setPlaybackStatus: (status: {
-    isPlaying?: boolean;
-    positionMs?: number;
-    durationMs?: number;
-    isBuffering?: boolean;
-  }) => void;
+  setPlaybackStatus: (status: { isPlaying?: boolean; positionMs?: number; durationMs?: number; isBuffering?: boolean }) => void;
   toggleHud: (force?: boolean) => void;
   toggleLock: () => void;
   setPlaybackSpeed: (speed: number) => void;
@@ -73,196 +67,152 @@ interface PlayerState {
 
 const ASPECT_ORDER: AspectRatioMode[] = ['FIT', 'FILL', 'STRETCH', '16:9', '4:3'];
 const DECODER_ORDER: DecoderMode[] = ['HW+', 'HW', 'SW'];
+const DEFAULT_REPEAT: ABRepeatState = { enabled: false, pointAMs: null, pointBMs: null };
 
 export const usePlayerStore = create<PlayerState>((set, get) => ({
   activeVideo: null,
   playlist: [],
   isMinimized: false,
-  isPlaying: true,
+  isPlaying: false,
   positionMs: 0,
   durationMs: 0,
   isBuffering: false,
   isHudVisible: true,
   isLocked: false,
-  playbackSpeed: 1.0,
-  volumeBoost: 1.0,
+  playbackSpeed: 1,
+  volumeBoost: 1,
   isMuted: false,
   brightness: 0.75,
   decoderMode: 'HW+',
   aspectRatio: 'FIT',
-  zoomScale: 1.0,
-  abRepeat: { enabled: false, pointAMs: null, pointBMs: null },
+  zoomScale: 1,
+  abRepeat: DEFAULT_REPEAT,
   subtitleTracks: [],
   activeSubtitleId: null,
   subtitleOffsetMs: 0,
-  subtitleFontSize: 18,
+  subtitleFontSize: 20,
   audioOffsetMs: 0,
   activeEqPresetId: 'flat',
   eqBands: [0, 0, 0, 0, 0],
   sleepTimerRemainingSec: null,
   isBackgroundAudioEnabled: false,
 
-  openVideo: (video, queue = [video], resumeMs = 0) =>
+  openVideo: (video, queue = [video], resumeMs = 0) => {
+    const playlist = queue.some((entry) => entry.id === video.id) ? queue : [video, ...queue];
     set({
       activeVideo: video,
-      playlist: queue.length ? queue : [video],
+      playlist,
       isMinimized: false,
       isPlaying: true,
-      positionMs: resumeMs,
-      durationMs: video.duration || 0,
+      positionMs: Math.max(0, resumeMs),
+      durationMs: Math.max(0, video.duration),
       isBuffering: true,
       isHudVisible: true,
       isLocked: false,
-      zoomScale: 1.0,
-      abRepeat: { enabled: false, pointAMs: null, pointBMs: null },
-    }),
+      zoomScale: 1,
+      abRepeat: { ...DEFAULT_REPEAT },
+      subtitleTracks: [],
+      activeSubtitleId: null,
+      subtitleOffsetMs: 0,
+      audioOffsetMs: 0,
+    });
+  },
 
   minimizePlayer: () => set({ isMinimized: true, isLocked: false }),
-
   expandPlayer: () => set({ isMinimized: false, isHudVisible: true }),
+  closePlayer: () => set({
+    activeVideo: null,
+    playlist: [],
+    isMinimized: false,
+    isPlaying: false,
+    positionMs: 0,
+    durationMs: 0,
+    isBuffering: false,
+    isLocked: false,
+    abRepeat: { ...DEFAULT_REPEAT },
+    subtitleTracks: [],
+    activeSubtitleId: null,
+  }),
 
-  closePlayer: () =>
-    set({
-      activeVideo: null,
-      isMinimized: false,
-      isPlaying: false,
-      isLocked: false,
-      abRepeat: { enabled: false, pointAMs: null, pointBMs: null },
-    }),
-
-  setPlaybackStatus: (status) =>
-    set((state) => ({
-      isPlaying: status.isPlaying ?? state.isPlaying,
-      positionMs: status.positionMs ?? state.positionMs,
-      durationMs: status.durationMs ?? state.durationMs,
-      isBuffering: status.isBuffering ?? state.isBuffering,
-    })),
-
-  toggleHud: (force) =>
-    set((state) => ({
-      isHudVisible: typeof force === 'boolean' ? force : !state.isHudVisible,
-    })),
-
-  toggleLock: () =>
-    set((state) => ({
-      isLocked: !state.isLocked,
-      isHudVisible: true,
-    })),
-
-  setPlaybackSpeed: (speed) =>
-    set({ playbackSpeed: Math.max(0.25, Math.min(4.0, Number(speed.toFixed(2)))) }),
-
-  setVolumeBoost: (vol) =>
-    set({
-      volumeBoost: Math.max(0, Math.min(2.0, Number(vol.toFixed(2)))),
-      isMuted: vol <= 0.01,
-    }),
-
+  setPlaybackStatus: (status) => set((state) => ({
+    isPlaying: status.isPlaying ?? state.isPlaying,
+    positionMs: status.positionMs ?? state.positionMs,
+    durationMs: status.durationMs ?? state.durationMs,
+    isBuffering: status.isBuffering ?? state.isBuffering,
+  })),
+  toggleHud: (force) => set((state) => ({ isHudVisible: typeof force === 'boolean' ? force : !state.isHudVisible })),
+  toggleLock: () => set((state) => ({ isLocked: !state.isLocked, isHudVisible: true })),
+  setPlaybackSpeed: (speed) => set({ playbackSpeed: Math.max(0.5, Math.min(3, Number(speed.toFixed(2)))) }),
+  setVolumeBoost: (vol) => set({ volumeBoost: Math.max(0, Math.min(1, Number(vol.toFixed(2)))), isMuted: vol <= 0.001 }),
   toggleMute: () => set((state) => ({ isMuted: !state.isMuted })),
+  setBrightness: (value) => set({ brightness: Math.max(0.02, Math.min(1, Number(value.toFixed(2)))) }),
 
-  setBrightness: (val) =>
-    set({ brightness: Math.max(0.02, Math.min(1.0, Number(val.toFixed(2)))) }),
+  // Retained in state for compatibility; decoder controls are deliberately not exposed as functional features.
+  cycleDecoderMode: () => set((state) => {
+    const index = DECODER_ORDER.indexOf(state.decoderMode);
+    return { decoderMode: DECODER_ORDER[(index + 1) % DECODER_ORDER.length] };
+  }),
+  cycleAspectRatio: () => set((state) => {
+    const index = ASPECT_ORDER.indexOf(state.aspectRatio);
+    return { aspectRatio: ASPECT_ORDER[(index + 1) % ASPECT_ORDER.length], zoomScale: 1 };
+  }),
+  setZoomScale: (scale) => set({ zoomScale: Math.max(0.5, Math.min(2.5, Number(scale.toFixed(2)))) }),
 
-  cycleDecoderMode: () =>
-    set((state) => {
-      const idx = DECODER_ORDER.indexOf(state.decoderMode);
-      const next = DECODER_ORDER[(idx + 1) % DECODER_ORDER.length];
-      return { decoderMode: next };
-    }),
+  setABPointA: (ms) => set({ abRepeat: { enabled: false, pointAMs: Math.max(0, ms), pointBMs: null } }),
+  setABPointB: (ms) => set((state) => {
+    const a = state.abRepeat.pointAMs;
+    if (a === null || ms <= a + 500 || (state.durationMs > 0 && ms > state.durationMs)) return state;
+    return { abRepeat: { enabled: true, pointAMs: a, pointBMs: ms } };
+  }),
+  clearABRepeat: () => set({ abRepeat: { ...DEFAULT_REPEAT } }),
 
-  cycleAspectRatio: () =>
-    set((state) => {
-      const idx = ASPECT_ORDER.indexOf(state.aspectRatio);
-      const next = ASPECT_ORDER[(idx + 1) % ASPECT_ORDER.length];
-      return { aspectRatio: next, zoomScale: 1.0 };
-    }),
-
-  setZoomScale: (scale) =>
-    set({ zoomScale: Math.max(0.5, Math.min(2.5, Number(scale.toFixed(2)))) }),
-
-  setABPointA: (ms) =>
-    set({
-      abRepeat: { enabled: false, pointAMs: ms, pointBMs: null },
-    }),
-
-  setABPointB: (ms) =>
-    set((state) => {
-      if (state.abRepeat.pointAMs === null || ms <= state.abRepeat.pointAMs + 500) {
-        return state;
-      }
-      return {
-        abRepeat: {
-          enabled: true,
-          pointAMs: state.abRepeat.pointAMs,
-          pointBMs: ms,
-        },
-      };
-    }),
-
-  clearABRepeat: () =>
-    set({ abRepeat: { enabled: false, pointAMs: null, pointBMs: null } }),
-
-  addSubtitleTrack: (track) =>
-    set((state) => ({
-      subtitleTracks: [...state.subtitleTracks.filter((t) => t.name !== track.name), track],
-      activeSubtitleId: track.id,
-    })),
-
+  addSubtitleTrack: (track) => set((state) => ({
+    subtitleTracks: [...state.subtitleTracks.filter((entry) => entry.id !== track.id && entry.name !== track.name), track],
+    activeSubtitleId: track.id,
+  })),
   selectSubtitleTrack: (id) => set({ activeSubtitleId: id }),
-
-  adjustSubtitleOffset: (deltaMs) =>
-    set((state) => ({ subtitleOffsetMs: state.subtitleOffsetMs + deltaMs })),
-
-  setSubtitleFontSize: (size) =>
-    set({ subtitleFontSize: Math.max(12, Math.min(34, size)) }),
-
-  adjustAudioOffset: (deltaMs) =>
-    set((state) => ({ audioOffsetMs: state.audioOffsetMs + deltaMs })),
-
-  setEqPreset: (presetId, bands) =>
-    set({ activeEqPresetId: presetId, eqBands: [...bands] }),
-
-  setEqBandGain: (index, gainDb) =>
-    set((state) => {
-      const updated = [...state.eqBands];
-      updated[index] = Math.max(-12, Math.min(12, gainDb));
-      return { activeEqPresetId: 'custom', eqBands: updated };
-    }),
-
-  setSleepTimer: (minutes) =>
-    set({ sleepTimerRemainingSec: minutes ? minutes * 60 : null }),
-
+  adjustSubtitleOffset: (deltaMs) => set((state) => ({
+    subtitleOffsetMs: Math.max(-120000, Math.min(120000, state.subtitleOffsetMs + deltaMs)),
+  })),
+  setSubtitleFontSize: (size) => set({ subtitleFontSize: Math.max(12, Math.min(36, size)) }),
+  adjustAudioOffset: (deltaMs) => set((state) => ({
+    audioOffsetMs: Math.max(-120000, Math.min(120000, state.audioOffsetMs + deltaMs)),
+  })),
+  setEqPreset: (presetId, bands) => set({ activeEqPresetId: presetId, eqBands: [...bands] }),
+  setEqBandGain: (index, gainDb) => set((state) => {
+    if (index < 0 || index >= state.eqBands.length) return state;
+    const updated = [...state.eqBands];
+    updated[index] = Math.max(-12, Math.min(12, gainDb));
+    return { activeEqPresetId: 'custom', eqBands: updated };
+  }),
+  setSleepTimer: (minutes) => set({ sleepTimerRemainingSec: minutes === null ? null : Math.max(1, minutes) * 60 }),
   tickSleepTimer: () => {
-    const { sleepTimerRemainingSec } = get();
-    if (sleepTimerRemainingSec === null) return false;
-    if (sleepTimerRemainingSec <= 1) {
+    const remaining = get().sleepTimerRemainingSec;
+    if (remaining === null) return false;
+    if (remaining <= 1) {
       set({ sleepTimerRemainingSec: null, isPlaying: false });
       return true;
     }
-    set({ sleepTimerRemainingSec: sleepTimerRemainingSec - 1 });
+    set({ sleepTimerRemainingSec: remaining - 1 });
     return false;
   },
-
-  toggleBackgroundAudio: () =>
-    set((state) => ({ isBackgroundAudioEnabled: !state.isBackgroundAudioEnabled })),
-
+  toggleBackgroundAudio: () => set((state) => ({ isBackgroundAudioEnabled: !state.isBackgroundAudioEnabled })),
   playNextInQueue: () => {
     const { activeVideo, playlist } = get();
-    if (!activeVideo || playlist.length <= 1) return null;
-    const idx = playlist.findIndex((v) => v.id === activeVideo.id);
-    if (idx === -1 || idx + 1 >= playlist.length) return null;
-    const nextVideo = playlist[idx + 1];
-    get().openVideo(nextVideo, playlist, 0);
-    return nextVideo;
+    if (!activeVideo) return null;
+    const index = playlist.findIndex((item) => item.id === activeVideo.id);
+    if (index < 0 || index + 1 >= playlist.length) return null;
+    const next = playlist[index + 1];
+    get().openVideo(next, playlist, 0);
+    return next;
   },
-
   playPrevInQueue: () => {
     const { activeVideo, playlist } = get();
-    if (!activeVideo || playlist.length <= 1) return null;
-    const idx = playlist.findIndex((v) => v.id === activeVideo.id);
-    if (idx <= 0) return null;
-    const prevVideo = playlist[idx - 1];
-    get().openVideo(prevVideo, playlist, 0);
-    return prevVideo;
+    if (!activeVideo) return null;
+    const index = playlist.findIndex((item) => item.id === activeVideo.id);
+    if (index <= 0) return null;
+    const previous = playlist[index - 1];
+    get().openVideo(previous, playlist, 0);
+    return previous;
   },
 }));
