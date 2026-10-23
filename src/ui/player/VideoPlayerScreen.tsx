@@ -37,18 +37,23 @@ export const VideoPlayerScreen: React.FC = () => {
   const originalBrightness = useRef<number | null>(null);
 
   useEffect(() => {
-    let mounted = true;
-    HardwareService.getBrightness().then((value) => {
-      if (!mounted) return;
-      originalBrightness.current = value;
-      usePlayerStore.getState().setBrightness(value);
-    }).catch(() => {});
-    return () => {
-      mounted = false;
-      if (originalBrightness.current !== null) void HardwareService.setBrightness(originalBrightness.current);
+    let cancelled = false;
+    if (activeVideo && originalBrightness.current === null) {
+      HardwareService.getBrightness().then((value) => {
+        if (cancelled || !usePlayerStore.getState().activeVideo) return;
+        originalBrightness.current = value;
+        usePlayerStore.getState().setBrightness(value);
+      }).catch(() => {});
+    } else if (!activeVideo) {
+      if (originalBrightness.current !== null) {
+        const valueToRestore = originalBrightness.current;
+        originalBrightness.current = null;
+        void HardwareService.setBrightness(valueToRestore);
+      }
       void HardwareService.unlockOrientation();
-    };
-  }, []);
+    }
+    return () => { cancelled = true; };
+  }, [Boolean(activeVideo)]);
 
   if (!activeVideo) return null;
   return <PlayerContent key={activeVideo.id} video={activeVideo} />;
