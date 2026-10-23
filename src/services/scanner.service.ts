@@ -45,7 +45,8 @@ export const ScannerService = {
     const folderMap = new Map<string, VideoFolder>();
     const allVideos: VideoItem[] = [];
     const albums = await MediaLibrary.getAlbumsAsync({ includeSmartAlbums: true });
-    const albumNames = new Map(albums.map((album) => [album.id, album.title]));
+    const albumNames = new Map<string, string>();
+    for (const album of albums) albumNames.set(album.id, album.title);
 
     let after: string | undefined;
     let hasNextPage = true;

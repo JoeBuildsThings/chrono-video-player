@@ -354,12 +354,12 @@ export const LibraryScreen: React.FC = () => {
                     <Text style={styles.countText}>{viewMode === 'folders' ? displayedFolders.length : displayedVideos.length}</Text>
                   </View>
                   <TouchableOpacity accessibilityLabel="Change sort order" onPress={() => {
-                    if (sortOrder === 'asc') {
-                      setSorting(sortField, 'desc');
+                    if (sortOrder === 'desc') {
+                      setSorting(sortField, 'asc');
                     } else {
                       const fields = ['date', 'title', 'duration'] as const;
                       const index = fields.indexOf(sortField as 'date' | 'title' | 'duration');
-                      setSorting(fields[(index + 1) % fields.length], 'asc');
+                      setSorting(fields[(index + 1) % fields.length], 'desc');
                     }
                   }} style={styles.sortButton}>
                     <Ionicons name="swap-vertical" size={16} color={THEME.colors.textSecondary} />
@@ -442,7 +442,7 @@ export const LibraryScreen: React.FC = () => {
               <PermissionGate
                 status={permissionStatus}
                 onRequestPermission={requestMediaPermission}
-                onOpenNetworkStream={() => setViewMode('streams')}
+                onOpenNetworkStream={() => setStreamDialogVisible(true)}
                 onPickExternalVideo={handlePickVideo}
               />
             </View>
@@ -457,6 +457,39 @@ export const LibraryScreen: React.FC = () => {
           )}
         </Animated.View>
       </SafeAreaView>
+
+      <Modal visible={streamDialogVisible} transparent animationType="fade" onRequestClose={() => setStreamDialogVisible(false)} statusBarTranslucent>
+        <View style={styles.modalBackdrop}>
+          <GlassPanel style={styles.streamDialog} intensity={55} heavy activeBorder>
+            <View style={styles.modalHandle} />
+            <View style={styles.modalHeader}>
+              <View>
+                <Text style={styles.eyebrow}>NETWORK PLAYBACK</Text>
+                <Text style={styles.modalTitle}>Open a stream</Text>
+              </View>
+              <TouchableOpacity accessibilityLabel="Close stream dialog" onPress={() => setStreamDialogVisible(false)} style={styles.headerButton}>
+                <Ionicons name="close" size={20} color={THEME.colors.textPrimary} />
+              </TouchableOpacity>
+            </View>
+            <Text style={styles.streamCaption}>Use an HTTP or HTTPS video URL. HLS links ending in .m3u8 work when supported by the source.</Text>
+            <TextInput
+              value={streamUrl}
+              onChangeText={setStreamUrl}
+              placeholder="https://example.com/video.mp4"
+              placeholderTextColor={THEME.colors.textMuted}
+              autoCapitalize="none"
+              autoCorrect={false}
+              keyboardType="url"
+              style={styles.streamInput}
+              accessibilityLabel="Video stream URL"
+            />
+            <TouchableOpacity style={styles.primaryButton} onPress={handleLaunchStream}>
+              <Ionicons name="play" size={17} color="#FFFFFF" />
+              <Text style={styles.primaryButtonText}>Play stream</Text>
+            </TouchableOpacity>
+          </GlassPanel>
+        </View>
+      </Modal>
 
       <Modal visible={settingsVisible} transparent animationType="fade" onRequestClose={() => setSettingsVisible(false)}>
         <View style={styles.modalBackdrop}>
@@ -561,6 +594,7 @@ const styles = StyleSheet.create({
   errorToast: { flexDirection: 'row', alignItems: 'center', gap: 9, borderWidth: 1, borderColor: 'rgba(248,113,113,0.28)', backgroundColor: 'rgba(65,17,26,0.93)', borderRadius: 13, padding: 11, marginBottom: 4 },
   errorText: { color: '#FECACA', flex: 1, fontSize: 10 },
   modalBackdrop: { flex: 1, justifyContent: 'flex-end', backgroundColor: 'rgba(1,5,15,0.74)' },
+  streamDialog: { marginHorizontal: 18, padding: 17, borderRadius: 23, gap: 10, backgroundColor: 'rgba(8,20,42,0.98)' },
   settingsSheet: { backgroundColor: '#0A1730', borderTopLeftRadius: 26, borderTopRightRadius: 26, paddingHorizontal: 21, paddingTop: 11, paddingBottom: 30, borderWidth: 1, borderColor: 'rgba(56,189,248,0.22)' },
   modalHandle: { width: 38, height: 4, borderRadius: 2, backgroundColor: 'rgba(148,163,184,0.45)', alignSelf: 'center', marginBottom: 16 },
   modalHeader: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', marginBottom: 12 },
